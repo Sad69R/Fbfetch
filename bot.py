@@ -11,7 +11,7 @@ from selenium.webdriver.chrome.options import Options
 # =========================
 # CONFIG
 # =========================
-TELEGRAM_BOT_TOKEN = "8252295424:AAGRllLya9BowzOdoKQvEt42MMTwUSAkn2M"
+TELEGRAM_BOT_TOKEN = "PUT_YOUR_BOT_TOKEN_HERE"
 DAILY_LIMIT = 5
 SUBSCRIBE_USERNAME = "@A_udw"
 
@@ -122,13 +122,18 @@ class FacebookScraper:
 
 
 # =========================
-# TELEGRAM
+# TELEGRAM HANDLERS
 # =========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Send Facebook profile URL\n\n"
-        f"Free users: {DAILY_LIMIT}/day\n"
-        f"Subscribe: DM {SUBSCRIBE_USERNAME}"
+        "🔍 Facebook Photos Bot\n"
+        "• 📸 Profile photo\n"
+        "• 🖼️ Cover photo\n"
+        "• 📷 Up to 20 public photos\n\n"
+        f"🎁 Free users: **{DAILY_LIMIT} requests daily**\n"
+        f"💎 Unlimited access: DM **{SUBSCRIBE_USERNAME}**\n\n"
+        "📌 send a Facebook profile\n\n",
+        parse_mode="Markdown"
     )
 
 
@@ -137,7 +142,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = (update.message.text or "").strip()
 
     if "facebook.com" not in url:
-        await update.message.reply_text("Invalid Facebook URL")
+        await update.message.reply_text("❌ Please send a valid Facebook profile URL.")
         return
 
     subscribers = load_subscribers()
@@ -146,34 +151,65 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         allowed, remaining = check_limit(user_id)
         if not allowed:
             await update.message.reply_text(
-                f"Daily limit reached.\nSubscribe via {SUBSCRIBE_USERNAME}"
+                "🚫 **Daily limit reached**\n\n"
+                f"💎 Get unlimited requests by messaging {SUBSCRIBE_USERNAME}",
+                parse_mode="Markdown"
             )
             return
     else:
         remaining = "∞"
 
-    await update.message.reply_text(f"Fetching… Remaining today: {remaining}")
+    status = await update.message.reply_text(
+        "⏳ **Fetching profile data…**\n"
+        f"📊 Remaining today: **{remaining}**",
+        parse_mode="Markdown"
+    )
 
     scraper = FacebookScraper()
     data = scraper.scrape(url)
 
+    await status.delete()
+
+    # =========================
+    # SEND RESULTS
+    # =========================
+    sent_profile = sent_cover = sent_photos = 0
+
     if data["profile"]:
-        await update.message.reply_photo(data["profile"], caption="Profile Photo")
+        await update.message.reply_photo(data["profile"], caption="📸 Profile Photo")
+        sent_profile = 1
 
     if data["cover"]:
-        await update.message.reply_photo(data["cover"], caption="Cover Photo")
+        await update.message.reply_photo(data["cover"], caption="🖼️ Cover Photo")
+        sent_cover = 1
 
     if data["photos"]:
         media = [InputMediaPhoto(p) for p in data["photos"]]
         for i in range(0, len(media), 10):
             await update.message.reply_media_group(media[i:i+10])
+        sent_photos = len(data["photos"])
+
+    # =========================
+    # SUMMARY
+    # =========================
+    await update.message.reply_text(
+        "✅"
+        f"📸 Profile photo: {'✅' if sent_profile else '❌'}\n"
+        f"🖼️ Cover photo: {'✅' if sent_cover else '❌'}\n"
+        f"📷 Public photos: **{sent_photos}**\n\n"
+        "🚀",
+        parse_mode="Markdown"
+    )
 
 
+# =========================
+# MAIN
+# =========================
 def main():
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    print("Bot running")
+    print("✅ Bot is running...")
     app.run_polling()
 
 
