@@ -1,22 +1,58 @@
 import time
+import json
+import os
+from datetime import date
 from telegram import Update, InputMediaPhoto
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    ContextTypes,
-    filters,
-)
+from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
-
 
 # =========================
 # CONFIG
 # =========================
 TELEGRAM_BOT_TOKEN = "8252295424:AAGRllLya9BowzOdoKQvEt42MMTwUSAkn2M"
+DAILY_LIMIT = 5
+SUBSCRIBE_USERNAME = "@A_udw"
 
+USAGE_FILE = "usage.json"
+SUBSCRIBERS_FILE = "subscribers.txt"
+
+# =========================
+# FILE HELPERS
+# =========================
+def load_usage():
+    if not os.path.exists(USAGE_FILE):
+        return {}
+    with open(USAGE_FILE, "r") as f:
+        return json.load(f)
+
+def save_usage(data):
+    with open(USAGE_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
+def load_subscribers():
+    if not os.path.exists(SUBSCRIBERS_FILE):
+        return set()
+    with open(SUBSCRIBERS_FILE, "r") as f:
+        return {line.strip() for line in f if line.strip()}
+
+def check_limit(user_id: int):
+    usage = load_usage()
+    today = str(date.today())
+    uid = str(user_id)
+
+    if uid not in usage or usage[uid]["date"] != today:
+        usage[uid] = {"date": today, "count": 1}
+        save_usage(usage)
+        return True, DAILY_LIMIT - 1
+
+    if usage[uid]["count"] >= DAILY_LIMIT:
+        return False, 0
+
+    usage[uid]["count"] += 1
+    save_usage(usage)
+    return True, DAILY_LIMIT - usage[uid]["count"]
 
 # =========================
 # FACEBOOK SCRAPER
@@ -41,13 +77,10 @@ class FacebookScraper:
         }
 
         try:
-            # =========================
-            # PROFILE PAGE
-            # =========================
             driver.get(url)
             time.sleep(3)
 
-            # Profile photo (meta og:image)
+            # Profile photo
             try:
                 meta = driver.find_element(By.CSS_SELECTOR, "meta[property='og:image']")
                 data["profile_photo"] = meta.get_attribute("content")
@@ -64,9 +97,7 @@ class FacebookScraper:
             except:
                 pass
 
-            # =========================
-            # PUBLIC PHOTOS
-            # =========================
+            # Public photos
             driver.get(url.rstrip("/") + "/photos")
             time.sleep(2)
 
@@ -89,7 +120,6 @@ class FacebookScraper:
         finally:
             driver.quit()
 
-
 # =========================
 # TELEGRAM HANDLERS
 # =========================
@@ -100,26 +130,46 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• Profile photo\n"
         "• Cover photo\n"
         "• Public photos (media group)\n\n"
-        "Example:\nhttps://facebook.com/username"
+        f"🎁 Free users: **{DAILY_LIMIT} requests daily**\n"
+        f"💎 Unlimited access: DM **{SUBSCRIBE_USERNAME}**\n\n"
+        "Example:\nhttps://facebook.com/username",
+        parse_mode="Markdown"
     )
 
-
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
     url = (update.message.text or "").strip()
 
     if "facebook.com" not in url:
         await update.message.reply_text("❌ Please send a valid Facebook profile URL.")
         return
 
-    status = await update.message.reply_text("⏳ Fetching photos…")
+    subscribers = load_subscribers()
+
+    # Check subscription / limit
+    if str(user_id) not in subscribers:
+        allowed, remaining = check_limit(user_id)
+        if not allowed:
+            await update.message.reply_text(
+                "🚫 **Daily limit reached**\n\n"
+                f"💎 Get unlimited requests by messaging {SUBSCRIBE_USERNAME}",
+                parse_mode="Markdown"
+            )
+            return
+    else:
+        remaining = "∞"
+
+    status = await update.message.reply_text(
+        f"⏳ Fetching profile data…\n📊 Remaining today: **{remaining}**",
+        parse_mode="Markdown"
+    )
 
     scraper = FacebookScraper()
     data = scraper.scrape(url)
-
     await status.delete()
 
     # =========================
-    # SEND RESULTS (ORDERED)
+    # SEND RESULTS
     # =========================
     if data["profile_photo"]:
         await update.message.reply_photo(
@@ -137,16 +187,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"📷 Found {len(data['public_photos'])} public photos"
         )
-
         media = [InputMediaPhoto(p) for p in data["public_photos"]]
-
         for i in range(0, len(media), 10):
-            await update.message.reply_media_group(
-                media[i:i + 10]
-            )
+            await update.message.reply_media_group(media[i:i + 10])
     else:
         await update.message.reply_text("❌ No public photos found.")
-
 
 # =========================
 # MAIN
@@ -159,7 +204,6 @@ def main():
 
     print("Bot is running...")
     app.run_polling()
-
 
 if __name__ == "__main__":
     main()
