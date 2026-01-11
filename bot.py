@@ -12,7 +12,7 @@ from selenium.common.exceptions import ElementClickInterceptedException
 # =========================
 # CONFIG
 # =========================
-TELEGRAM_BOT_TOKEN = "PUT_YOUR_BOT_TOKEN_HERE"
+TELEGRAM_BOT_TOKEN = "8252295424:AAGRllLya9BowzOdoKQvEt42MMTwUSAkn2M"
 DAILY_LIMIT = 5
 SUBSCRIBE_USERNAME = "@A_udw"
 
