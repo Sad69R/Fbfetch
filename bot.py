@@ -10,10 +10,11 @@ from telegram.ext import (
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
+from selenium.common.exceptions import NoSuchElementException, ElementClickInterceptedException
 
 
 # =========================
-# ضع توكن البوت هنا
+# Telegram bot token
 # =========================
 TELEGRAM_BOT_TOKEN = "8252295424:AAGRllLya9BowzOdoKQvEt42MMTwUSAkn2M"
 
@@ -34,7 +35,7 @@ class FacebookScraper:
         self.driver = webdriver.Chrome(options=chrome_options)
         return self.driver
 
-    def scrape_photos_and_links(self, profile_url: str):
+    def scrape_profile(self, profile_url: str):
         try:
             self.setup_driver()
             self.driver.get(profile_url)
@@ -44,7 +45,7 @@ class FacebookScraper:
                 "profile_photo": None,
                 "cover_photo": None,
                 "public_photos": [],
-                "friends_links": [],
+                "friends_links": set(),
             }
 
             # -------------------------
@@ -91,32 +92,51 @@ class FacebookScraper:
                 for img in imgs:
                     src = img.get_attribute("src")
                     if src and "scontent" in src:
-                        if src not in result["public_photos"]:
-                            result["public_photos"].append(src)
+                        result["public_photos"].append(src)
                     if len(result["public_photos"]) >= 20:
                         break
             except:
                 pass
 
             # -------------------------
-            # Friends mentions/comments/tags links
+            # Friends mentions/tags/comments
             # -------------------------
             try:
-                self.driver.get(profile_url)  # back to main profile page
+                self.driver.get(profile_url)
                 time.sleep(2)
+                # scroll down to load posts
+                for _ in range(3):
+                    self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+                    time.sleep(1)
 
+                # Expand comments dynamically
+                for _ in range(5):
+                    try:
+                        more_comments = self.driver.find_elements(
+                            By.XPATH, "//span[contains(text(),'View more comments')]"
+                        )
+                        for btn in more_comments:
+                            try:
+                                btn.click()
+                                time.sleep(0.5)
+                            except (ElementClickInterceptedException, NoSuchElementException):
+                                continue
+                    except:
+                        break
+
+                # Collect links inside posts and comments
                 links = self.driver.find_elements(By.TAG_NAME, "a")
-                friends_set = set()
                 for link in links:
                     href = link.get_attribute("href")
-                    # heuristic: should be facebook profile link
                     if href and "facebook.com/" in href:
-                        # ignore page posts, groups, events
                         if any(x in href for x in ["profile.php?id=", "/friends"]):
-                            friends_set.add(href)
-                result["friends_links"] = list(friends_set)[:30]  # limit top 30
+                            result["friends_links"].add(href)
+
             except:
                 pass
+
+            # Limit top 30 friends links
+            result["friends_links"] = list(result["friends_links"])[:30]
 
             return result
 
@@ -130,7 +150,7 @@ class FacebookScraper:
 
 
 # =========================
-# Telegram Handlers
+# Telegram handlers
 # =========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -145,7 +165,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = (update.message.text or "").strip()
-
     if "facebook.com" not in url:
         await update.message.reply_text("❌ Please send a valid Facebook profile URL.")
         return
@@ -153,7 +172,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔍 Fetching data... this may take a few seconds.")
 
     scraper = FacebookScraper()
-    data = scraper.scrape_photos_and_links(url)
+    data = scraper.scrape_profile(url)
 
     if not data:
         await update.message.reply_text("❌ Failed to fetch data. The profile may be private or blocked.")
@@ -179,7 +198,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("No public photos found.")
 
-    # Friends mentions/comments/tags links
+    # Friends links
     friends_links = data["friends_links"]
     if friends_links:
         text = "👥 Found friends mentions/comments/tags (top 30):\n" + "\n".join(friends_links)
