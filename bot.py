@@ -13,7 +13,7 @@ from selenium.webdriver.chrome.options import Options
 
 
 # =========================
-# PUT YOUR BOT TOKEN HERE
+# ضع توكن البوت هنا
 # =========================
 TELEGRAM_BOT_TOKEN = "8252295424:AAGRllLya9BowzOdoKQvEt42MMTwUSAkn2M"
 
@@ -46,25 +46,40 @@ class FacebookScraper:
                 "public_photos": [],
             }
 
-            # Profile photo
+            # -------------------------
+            # Profile photo (with fallback for private)
+            # -------------------------
             try:
                 profile_img = self.driver.find_element(
                     By.CSS_SELECTOR, "image[width='168'], img[data-imgperflogname='profile']"
                 )
                 result["profile_photo"] = profile_img.get_attribute("src")
             except:
-                pass
+                # fallback: meta tag og:image
+                try:
+                    meta_profile = self.driver.find_element(By.CSS_SELECTOR, "meta[property='og:image']")
+                    result["profile_photo"] = meta_profile.get_attribute("content")
+                except:
+                    pass
 
-            # Cover photo
+            # -------------------------
+            # Cover photo (with fallback)
+            # -------------------------
             try:
                 cover_img = self.driver.find_element(
                     By.CSS_SELECTOR, "img[data-imgperflogname='profileCoverPhoto']"
                 )
                 result["cover_photo"] = cover_img.get_attribute("src")
             except:
-                pass
+                try:
+                    meta_cover = self.driver.find_element(By.CSS_SELECTOR, "meta[property='og:image']")
+                    result["cover_photo"] = meta_cover.get_attribute("content")
+                except:
+                    pass
 
+            # -------------------------
             # Public photos
+            # -------------------------
             try:
                 self.driver.get(profile_url.rstrip("/") + "/photos")
                 time.sleep(2)
@@ -136,7 +151,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Public photos
     public_photos = data["public_photos"]
     if public_photos:
-        await update.message.reply_text(f"📷 Found {len(public_photos)} public photos. Sending top {min(20, len(public_photos))}...")
+        await update.message.reply_text(
+            f"📷 Found {len(public_photos)} public photos. Sending top {min(20, len(public_photos))}..."
+        )
         media = [InputMediaPhoto(url) for url in public_photos[:20]]
         for i in range(0, len(media), 10):  # Telegram media group max 10
             await update.message.reply_media_group(media[i:i+10])
