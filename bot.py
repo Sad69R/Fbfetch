@@ -44,6 +44,7 @@ class FacebookScraper:
                 "profile_photo": None,
                 "cover_photo": None,
                 "public_photos": [],
+                "friends_links": [],
             }
 
             # -------------------------
@@ -55,7 +56,6 @@ class FacebookScraper:
                 )
                 result["profile_photo"] = profile_img.get_attribute("src")
             except:
-                # fallback: meta tag og:image
                 try:
                     meta_profile = self.driver.find_element(By.CSS_SELECTOR, "meta[property='og:image']")
                     result["profile_photo"] = meta_profile.get_attribute("content")
@@ -100,6 +100,22 @@ class FacebookScraper:
             except:
                 pass
 
+            # -------------------------
+            # Public friends links
+            # -------------------------
+            try:
+                self.driver.get(profile_url)  # Go back to main profile page
+                time.sleep(2)
+                links = self.driver.find_elements(By.TAG_NAME, "a")
+                for link in links:
+                    href = link.get_attribute("href")
+                    if href and "facebook.com/" in href and "profile.php?id=" in href:
+                        if href not in result["friends_links"]:
+                            result["friends_links"].append(href)
+                result["friends_links"] = result["friends_links"][:20]  # limit to 20
+            except:
+                pass
+
             return result
 
         except Exception as e:
@@ -119,7 +135,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "👋 Send me a Facebook profile URL and I will fetch:\n"
         "• Profile photo\n"
         "• Cover photo\n"
-        "• Public photos (top 20)\n\n"
+        "• Public photos (top 20)\n"
+        "• Public friends links (top 20)\n\n"
         "Example:\nhttps://facebook.com/username"
     )
 
@@ -131,13 +148,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Please send a valid Facebook profile URL.")
         return
 
-    await update.message.reply_text("🔍 Fetching photos... this may take a few seconds.")
+    await update.message.reply_text("🔍 Fetching data... this may take a few seconds.")
 
     scraper = FacebookScraper()
     data = scraper.scrape_photos(url)
 
     if not data:
-        await update.message.reply_text("❌ Failed to fetch photos. The profile may be private or blocked.")
+        await update.message.reply_text("❌ Failed to fetch data. The profile may be private or blocked.")
         return
 
     # Profile photo
@@ -159,6 +176,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_media_group(media[i:i+10])
     else:
         await update.message.reply_text("No public photos found.")
+
+    # Public friends links
+    friends_links = data["friends_links"]
+    if friends_links:
+        text = "👥 Found public friends (top 20):\n" + "\n".join(friends_links)
+        await update.message.reply_text(text)
+    else:
+        await update.message.reply_text("No public friends found.")
 
 
 def main():
