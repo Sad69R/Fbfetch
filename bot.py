@@ -107,22 +107,27 @@ class FacebookScraper:
             driver.get(url)
             time.sleep(3)
 
+            # PROFILE ID
             data["profile_id"] = self.get_profile_id(driver, url)
 
+            # PROFILE PHOTO
             try:
                 meta = driver.find_element(By.CSS_SELECTOR, "meta[property='og:image']")
                 data["profile"] = meta.get_attribute("content")
             except:
                 pass
 
+            # COVER PHOTO
             try:
                 cover = driver.find_element(By.CSS_SELECTOR, "img[data-imgperflogname='profileCoverPhoto']")
                 data["cover"] = cover.get_attribute("src")
             except:
                 pass
 
+            # PUBLIC PHOTOS
             driver.get(url.rstrip("/") + "/photos")
             time.sleep(2)
+
             for _ in range(2):
                 driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
                 time.sleep(1)
@@ -130,7 +135,7 @@ class FacebookScraper:
             imgs = driver.find_elements(By.TAG_NAME, "img")
             for img in imgs:
                 src = img.get_attribute("src")
-                if src and "scontent" in src:
+                if src and "scontent" in src and src not in data["photos"]:
                     data["photos"].append(src)
                 if len(data["photos"]) >= 20:
                     break
@@ -146,13 +151,14 @@ class FacebookScraper:
 # =========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🔍 Facebook Photos Bot\n\n"
-        "📸 Profile photo\n"
-        "🖼️ Cover photo\n"
-        "📷 Up to 20 public photos\n"
+        "🔍 Facebook Scraper Bot\n\n"
+        "📸 Profile Photo\n"
+        "🖼️ Cover Photo\n"
+        "📷 Public Photos (media group)\n"
         "🆔 Profile ID\n\n"
-        f"🎁 Free users: {DAILY_LIMIT} requests / day\n"
-        f"💎 Unlimited: DM {SUBSCRIBE_USERNAME}"
+        f"🎁 Free: {DAILY_LIMIT} requests/day\n"
+        f"💎 Unlimited: DM {SUBSCRIBE_USERNAME}\n\n"
+        "📌 Just send a Facebook profile link"
     )
 
 
@@ -161,17 +167,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = (update.message.text or "").strip()
 
     if "facebook.com" not in url:
-        await update.message.reply_text("❌ Send a valid Facebook profile URL.")
+        await update.message.reply_text("❌ Send a valid Facebook profile link.")
         return
 
     subscribers = load_subscribers()
 
+    # LIMIT CHECK
     if str(user_id) not in subscribers:
         allowed, remaining = check_limit(user_id)
         if not allowed:
             await update.message.reply_text(
                 f"🚫 Daily limit reached ({DAILY_LIMIT})\n\n"
-                f"💎 Subscribe by messaging {SUBSCRIBE_USERNAME}"
+                f"💎 Subscribe via {SUBSCRIBE_USERNAME}"
             )
             return
     else:
@@ -186,14 +193,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await status.delete()
 
+    # =========================
+    # SEND RESULTS
+    # =========================
     if data["profile_id"]:
         await update.message.reply_text(f"🆔 Profile ID:\n{data['profile_id']}")
 
     if data["profile"]:
-        await update.message.reply_photo(data["profile"], caption="📸 Profile Photo")
+        await update.message.reply_photo(
+            data["profile"], caption="📸 Profile Photo"
+        )
 
     if data["cover"]:
-        await update.message.reply_photo(data["cover"], caption="🖼️ Cover Photo")
+        await update.message.reply_photo(
+            data["cover"], caption="🖼️ Cover Photo"
+        )
 
     if data["photos"]:
         media = [InputMediaPhoto(p) for p in data["photos"]]
