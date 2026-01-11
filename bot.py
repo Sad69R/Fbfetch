@@ -18,194 +18,183 @@ SUBSCRIBE_USERNAME = "@A_udw"
 USAGE_FILE = "usage.json"
 SUBSCRIBERS_FILE = "subscribers.txt"
 
+
 # =========================
 # FILE HELPERS
 # =========================
 def load_usage():
-    if not os.path.exists(USAGE_FILE):
-        with open(USAGE_FILE, "w") as f:
-            json.dump({}, f)
-        return {}
-    with open(USAGE_FILE, "r") as f:
-        return json.load(f)
+    if not os.path.exists(USAGE_FILE):
+        with open(USAGE_FILE, "w") as f:
+            json.dump({}, f)
+        return {}
+    with open(USAGE_FILE, "r") as f:
+        return json.load(f)
+
 
 def save_usage(data):
-    with open(USAGE_FILE, "w") as f:
-        json.dump(data, f, indent=2)
+    with open(USAGE_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
 
 def load_subscribers():
-    if not os.path.exists(SUBSCRIBERS_FILE):
-        return set()
-    with open(SUBSCRIBERS_FILE, "r") as f:
-        return {line.strip() for line in f if line.strip()}
+    if not os.path.exists(SUBSCRIBERS_FILE):
+        return set()
+    with open(SUBSCRIBERS_FILE, "r") as f:
+        return {line.strip() for line in f if line.strip()}
+
 
 def check_limit(user_id: int):
-    usage = load_usage()
-    today = str(date.today())
-    uid = str(user_id)
+    usage = load_usage()
+    today = str(date.today())
+    uid = str(user_id)
 
-    if uid not in usage or usage[uid]["date"] != today:
-        usage[uid] = {"date": today, "count": 1}
-        save_usage(usage)
-        return True, DAILY_LIMIT - 1
+    if uid not in usage or usage[uid]["date"] != today:
+        usage[uid] = {"date": today, "count": 1}
+        save_usage(usage)
+        return True, DAILY_LIMIT - 1
 
-    if usage[uid]["count"] >= DAILY_LIMIT:
-        return False, 0
+    if usage[uid]["count"] >= DAILY_LIMIT:
+        return False, 0
 
-    usage[uid]["count"] += 1
-    save_usage(usage)
-    return True, DAILY_LIMIT - usage[uid]["count"]
+    usage[uid]["count"] += 1
+    save_usage(usage)
+    return True, DAILY_LIMIT - usage[uid]["count"]
+
 
 # =========================
-# FACEBOOK SCRAPER
+# SCRAPER
 # =========================
 class FacebookScraper:
-    def setup_driver(self):
-        options = Options()
-        options.add_argument("--headless")
-        options.add_argument("--no-sandbox")
-        options.add_argument("--disable-dev-shm-usage")
-        options.add_argument("--window-size=1920,1080")
-        options.binary_location = "/usr/bin/chromium"
-        return webdriver.Chrome(options=options)
+    def setup_driver(self):
+        options = Options()
+        options.add_argument("--headless")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--window-size=1920,1080")
+        options.binary_location = "/usr/bin/chromium"
+        return webdriver.Chrome(options=options)
 
-    def get_profile_id(self, driver, url):
-        try:
-            meta = driver.find_element(By.CSS_SELECTOR, "meta[property='fb:profile_id']")
-            pid = meta.get_attribute("content")
-            if pid:
-                return pid
-        except:
-            pass
-        try:
-            mobile = url.replace("www.facebook.com", "m.facebook.com").replace("facebook.com", "m.facebook.com")
-            driver.get(mobile)
-            time.sleep(2)
-            if "id=" in driver.current_url:
-                return driver.current_url.split("id=")[1].split("&")[0]
-        except:
-            pass
-        return None
+    def scrape(self, url):
+        driver = self.setup_driver()
+        data = {
+            "profile": None,
+            "cover": None,
+            "photos": []
+        }
 
-    def scrape(self, url):
-        driver = self.setup_driver()
-        data = {"profile": None, "cover": None, "photos": [], "profile_id": None}
+        try:
+            driver.get(url)
+            time.sleep(3)
 
-        try:
-            driver.get(url)
-            time.sleep(3)
+            # Profile photo
+            try:
+                meta = driver.find_element(By.CSS_SELECTOR, "meta[property='og:image']")
+                data["profile"] = meta.get_attribute("content")
+            except:
+                pass
 
-            # PROFILE ID
-            data["profile_id"] = self.get_profile_id(driver, url)
+            # Cover photo
+            try:
+                cover = driver.find_element(By.CSS_SELECTOR, "img[data-imgperflogname='profileCoverPhoto']")
+                data["cover"] = cover.get_attribute("src")
+            except:
+                pass
 
-            # PROFILE PHOTO
-            try:
-                meta = driver.find_element(By.CSS_SELECTOR, "meta[property='og:image']")
-                data["profile"] = meta.get_attribute("content")
-            except:
-                pass
+            # Public photos
+            driver.get(url.rstrip("/") + "/photos")
+            time.sleep(2)
+            for _ in range(2):
+                driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+                time.sleep(1)
 
-            # COVER PHOTO
-            try:
-                cover = driver.find_element(By.CSS_SELECTOR, "img[data-imgperflogname='profileCoverPhoto']")
-                data["cover"] = cover.get_attribute("src")
-            except:
-                pass
+            imgs = driver.find_elements(By.TAG_NAME, "img")
+            for img in imgs:
+                src = img.get_attribute("src")
+                if src and "scontent" in src:
+                    data["photos"].append(src)
+                if len(data["photos"]) >= 20:
+                    break
 
-            # PUBLIC PHOTOS
-            driver.get(url.rstrip("/") + "/photos")
-            time.sleep(2)
-            for _ in range(2):
-                driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-                time.sleep(1)
+            return data
 
-            imgs = driver.find_elements(By.TAG_NAME, "img")
-            for img in imgs:
-                src = img.get_attribute("src")
-                if src and "scontent" in src and src not in data["photos"]:
-                    data["photos"].append(src)
-                if len(data["photos"]) >= 20:
-                    break
+        finally:
+            driver.quit()
 
-            return data
-
-        finally:
-            driver.quit()
 
 # =========================
 # TELEGRAM HANDLERS
 # =========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🔍 Facebook Scraper Bot\n\n"
-        "🆔 Profile ID\n"
-        "📸 Profile Photo\n"
-        "🖼️ Cover Photo\n"
-        "📷 Public Photos (media group)\n\n"
-        f"🎁 Free users: {DAILY_LIMIT} requests/day\n"
-        f"💎 Unlimited: DM {SUBSCRIBE_USERNAME}\n\n"
-        "📌 Send a Facebook profile link"
-    )
+    await update.message.reply_text(
+        "🔍 Facebook Photos Bot\n"
+        "• 📸 Profile photo\n"
+        "• 🖼️ Cover photo\n"
+        "• 📷 Up to 20 public photos\n\n"
+        f"🎁 Free users: **{DAILY_LIMIT} requests daily**\n"
+        f"💎 Unlimited access: DM **{SUBSCRIBE_USERNAME}**\n\n"
+        "📌 send a Facebook profile\n\n",
+        parse_mode="Markdown"
+    )
+
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    url = (update.message.text or "").strip()
+    user_id = update.effective_user.id
+    url = (update.message.text or "").strip()
 
-    if "facebook.com" not in url:
-        await update.message.reply_text("❌ Send a valid Facebook profile link.")
-        return
+    if "facebook.com" not in url:
+        await update.message.reply_text("❌ Please send a valid Facebook profile URL.")
+        return
 
-    subscribers = load_subscribers()
+    subscribers = load_subscribers()
 
-    # LIMIT CHECK
-    if str(user_id) not in subscribers:
-        allowed, remaining = check_limit(user_id)
-        if not allowed:
-            await update.message.reply_text(
-                f"🚫 Daily limit reached ({DAILY_LIMIT})\n💎 Subscribe via {SUBSCRIBE_USERNAME}"
-            )
-            return
-    else:
-        remaining = "∞"
+    if str(user_id) not in subscribers:
+        allowed, remaining = check_limit(user_id)
+        if not allowed:
+            await update.message.reply_text(
+                "🚫 **Daily limit reached**\n\n"
+                f"💎 Get unlimited requests by messaging {SUBSCRIBE_USERNAME}",
+                parse_mode="Markdown"
+            )
+            return
+    else:
+        remaining = "∞"
 
-    status = await update.message.reply_text(
-        f"⏳ Fetching profile data… Remaining today: {remaining}"
-    )
+    status = await update.message.reply_text(
+        "⏳ **Fetching profile data…**\n"
+        f"📊 Remaining today: **{remaining}**",
+        parse_mode="Markdown"
+    )
 
-    scraper = FacebookScraper()
-    data = scraper.scrape(url)
-    await status.delete()
+    scraper = FacebookScraper()
+    data = scraper.scrape(url)
 
-    # =========================
-    # SEND RESULTS IN ORDER
-    # =========================
-    if data.get("profile_id"):
-        await update.message.reply_text(f"🆔 Profile ID:\n{data['profile_id']}")
-        time.sleep(0.5)
+    await status.delete()
 
-    if data.get("profile"):
-        await update.message.reply_photo(data["profile"], caption="📸 Profile Photo")
-        time.sleep(0.5)
+    # =========================
+    # SEND RESULTS
+    # =========================
+    sent_profile = sent_cover = sent_photos = 0
 
-    if data.get("cover"):
-        await update.message.reply_photo(data["cover"], caption="🖼️ Cover Photo")
-        time.sleep(0.5)
+    if data["profile"]:
+        await update.message.reply_photo(data["profile"], caption="📸 Profile Photo")
+        sent_profile = 1
 
-    if data.get("photos"):
+    if data["cover"]:
+        await update.message.reply_photo(data["cover"], caption="🖼️ Cover Photo")
+        sent_cover = 1
+
+    if data["photos"]:
         media = [InputMediaPhoto(p) for p in data["photos"]]
         for i in range(0, len(media), 10):
             await update.message.reply_media_group(media[i:i+10])
-            time.sleep(0.5)
 
-# =========================
-# MAIN
-# =========================
+
 def main():
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    print("Bot is running...")
     app.run_polling()
+
 
 if __name__ == "__main__":
     main()
