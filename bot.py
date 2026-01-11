@@ -1,4 +1,3 @@
-import os
 import time
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -7,10 +6,11 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 
+
 # =========================
-# Configuration
+# PUT YOUR BOT TOKEN HERE
 # =========================
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_BOT_TOKEN = "8252295424:AAGRllLya9BowzOdoKQvEt42MMTwUSAkn2M"
 
 
 class FacebookScraper:
@@ -18,7 +18,6 @@ class FacebookScraper:
         self.driver = None
 
     def setup_driver(self):
-        """Setup headless Chrome driver (Railway compatible)"""
         chrome_options = Options()
         chrome_options.add_argument("--headless")
         chrome_options.add_argument("--no-sandbox")
@@ -30,7 +29,6 @@ class FacebookScraper:
         return self.driver
 
     def scrape_photos(self, profile_url):
-        """Scrape profile photo, cover photo, and some public photos"""
         try:
             self.setup_driver()
             self.driver.get(profile_url)
@@ -42,30 +40,21 @@ class FacebookScraper:
                 "public_photos": []
             }
 
-            # Profile photo
+            # Profile / cover photo
             try:
-                profile_pic = self.driver.find_element(
+                img = self.driver.find_element(
                     By.CSS_SELECTOR,
                     "img[data-imgperflogname='profileCoverPhoto']"
                 )
-                photos["profile_photo"] = profile_pic.get_attribute("src")
-            except:
-                pass
-
-            # Cover photo
-            try:
-                cover = self.driver.find_element(
-                    By.CSS_SELECTOR,
-                    "img[data-imgperflogname='profileCoverPhoto']"
-                )
-                photos["cover_photo"] = cover.get_attribute("src")
+                src = img.get_attribute("src")
+                photos["profile_photo"] = src
+                photos["cover_photo"] = src
             except:
                 pass
 
             # Public photos
             try:
-                photos_url = profile_url.rstrip("/") + "/photos"
-                self.driver.get(photos_url)
+                self.driver.get(profile_url.rstrip("/") + "/photos")
                 time.sleep(3)
 
                 for _ in range(3):
@@ -80,11 +69,10 @@ class FacebookScraper:
                     if src and "scontent" in src:
                         if src not in photos["public_photos"]:
                             photos["public_photos"].append(src)
-                    if len(photos["public_photos"]) >= 10:
+                    if len(photos["public_photos"]) >= 5:
                         break
-
-            except Exception as e:
-                print("Error loading public photos:", e)
+            except:
+                pass
 
             return photos
 
@@ -98,75 +86,39 @@ class FacebookScraper:
 
 
 # =========================
-# Telegram Handlers
+# Telegram handlers
 # =========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 Send me a Facebook profile URL and I will try to fetch:\n"
-        "• Profile photo\n"
-        "• Cover photo\n"
-        "• Public photos\n\n"
-        "Example:\nhttps://facebook.com/username"
+        "Send a Facebook profile URL.\nExample:\nhttps://facebook.com/username"
     )
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
+    url = update.message.text
 
-    if "facebook.com" not in text:
-        await update.message.reply_text("❌ Please send a valid Facebook profile URL.")
+    if "facebook.com" not in url:
+        await update.message.reply_text("Send a valid Facebook profile URL.")
         return
 
-    await update.message.reply_text("🔍 Fetching photos... please wait.")
+    await update.message.reply_text("Fetching photos, please wait...")
 
     scraper = FacebookScraper()
-    photos = scraper.scrape_photos(text)
+    photos = scraper.scrape_photos(url)
 
     if not photos:
-        await update.message.reply_text(
-            "❌ Failed to fetch photos.\nProfile may be private or Facebook blocked access."
-        )
+        await update.message.reply_text("Failed to fetch photos.")
         return
 
     if photos["profile_photo"]:
-        try:
-            await update.message.reply_photo(
-                photos["profile_photo"], caption="📸 Profile Photo"
-            )
-        except:
-            await update.message.reply_text(photos["profile_photo"])
+        await update.message.reply_photo(photos["profile_photo"])
 
-    if photos["cover_photo"]:
-        try:
-            await update.message.reply_photo(
-                photos["cover_photo"], caption="🖼️ Cover Photo"
-            )
-        except:
-            await update.message.reply_text(photos["cover_photo"])
-
-    if photos["public_photos"]:
-        await update.message.reply_text(
-            f"📷 Found {len(photos['public_photos'])} public photos:"
-        )
-        for i, url in enumerate(photos["public_photos"][:5], start=1):
-            try:
-                await update.message.reply_photo(url, caption=f"Photo {i}")
-                time.sleep(1)
-            except:
-                await update.message.reply_text(url)
-
-    if not any(
-        [photos["profile_photo"], photos["cover_photo"], photos["public_photos"]]
-    ):
-        await update.message.reply_text(
-            "❌ No photos found. Profile may be private."
-        )
+    for photo in photos["public_photos"]:
+        await update.message.reply_photo(photo)
+        time.sleep(1)
 
 
 def main():
-    if not TELEGRAM_BOT_TOKEN:
-        raise RuntimeError("TELEGRAM_BOT_TOKEN is not set")
-
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
@@ -178,4 +130,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
