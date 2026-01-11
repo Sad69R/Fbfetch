@@ -18,7 +18,6 @@ SUBSCRIBE_USERNAME = "@A_udw"
 USAGE_FILE = "usage.json"
 SUBSCRIBERS_FILE = "subscribers.txt"
 
-
 # =========================
 # FILE HELPERS
 # =========================
@@ -30,18 +29,15 @@ def load_usage():
     with open(USAGE_FILE, "r") as f:
         return json.load(f)
 
-
 def save_usage(data):
     with open(USAGE_FILE, "w") as f:
         json.dump(data, f, indent=2)
-
 
 def load_subscribers():
     if not os.path.exists(SUBSCRIBERS_FILE):
         return set()
     with open(SUBSCRIBERS_FILE, "r") as f:
         return {line.strip() for line in f if line.strip()}
-
 
 def check_limit(user_id: int):
     usage = load_usage()
@@ -60,9 +56,8 @@ def check_limit(user_id: int):
     save_usage(usage)
     return True, DAILY_LIMIT - usage[uid]["count"]
 
-
 # =========================
-# SCRAPER
+# FACEBOOK SCRAPER
 # =========================
 class FacebookScraper:
     def setup_driver(self):
@@ -82,7 +77,6 @@ class FacebookScraper:
                 return pid
         except:
             pass
-
         try:
             mobile = url.replace("www.facebook.com", "m.facebook.com").replace("facebook.com", "m.facebook.com")
             driver.get(mobile)
@@ -91,17 +85,11 @@ class FacebookScraper:
                 return driver.current_url.split("id=")[1].split("&")[0]
         except:
             pass
-
         return None
 
     def scrape(self, url):
         driver = self.setup_driver()
-        data = {
-            "profile": None,
-            "cover": None,
-            "photos": [],
-            "profile_id": None
-        }
+        data = {"profile": None, "cover": None, "photos": [], "profile_id": None}
 
         try:
             driver.get(url)
@@ -127,7 +115,6 @@ class FacebookScraper:
             # PUBLIC PHOTOS
             driver.get(url.rstrip("/") + "/photos")
             time.sleep(2)
-
             for _ in range(2):
                 driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
                 time.sleep(1)
@@ -145,22 +132,20 @@ class FacebookScraper:
         finally:
             driver.quit()
 
-
 # =========================
 # TELEGRAM HANDLERS
 # =========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🔍 Facebook Scraper Bot\n\n"
+        "🆔 Profile ID\n"
         "📸 Profile Photo\n"
         "🖼️ Cover Photo\n"
-        "📷 Public Photos (media group)\n"
-        "🆔 Profile ID\n\n"
-        f"🎁 Free: {DAILY_LIMIT} requests/day\n"
+        "📷 Public Photos (media group)\n\n"
+        f"🎁 Free users: {DAILY_LIMIT} requests/day\n"
         f"💎 Unlimited: DM {SUBSCRIBE_USERNAME}\n\n"
-        "📌 Just send a Facebook profile link"
+        "📌 Send a Facebook profile link"
     )
-
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -177,50 +162,44 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         allowed, remaining = check_limit(user_id)
         if not allowed:
             await update.message.reply_text(
-                f"🚫 Daily limit reached ({DAILY_LIMIT})\n\n"
-                f"💎 Subscribe via {SUBSCRIBE_USERNAME}"
+                f"🚫 Daily limit reached ({DAILY_LIMIT})\n💎 Subscribe via {SUBSCRIBE_USERNAME}"
             )
             return
     else:
         remaining = "∞"
 
     status = await update.message.reply_text(
-        f"⏳ Fetching data...\nRemaining today: {remaining}"
+        f"⏳ Fetching profile data… Remaining today: {remaining}"
     )
 
     scraper = FacebookScraper()
     data = scraper.scrape(url)
-
     await status.delete()
 
-    # =========================
-    # SEND RESULTS
-    # =========================
-    if data["profile_id"]:
+    # SEND RESULTS IN ORDER
+    if data.get("profile_id"):
         await update.message.reply_text(f"🆔 Profile ID:\n{data['profile_id']}")
 
-    if data["profile"]:
-        await update.message.reply_photo(
-            data["profile"], caption="📸 Profile Photo"
-        )
+    if data.get("profile"):
+        await update.message.reply_photo(data["profile"], caption="📸 Profile Photo")
 
-    if data["cover"]:
-        await update.message.reply_photo(
-            data["cover"], caption="🖼️ Cover Photo"
-        )
+    if data.get("cover"):
+        await update.message.reply_photo(data["cover"], caption="🖼️ Cover Photo")
 
-    if data["photos"]:
+    if data.get("photos"):
         media = [InputMediaPhoto(p) for p in data["photos"]]
         for i in range(0, len(media), 10):
             await update.message.reply_media_group(media[i:i+10])
 
-
+# =========================
+# MAIN
+# =========================
 def main():
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    print("Bot is running...")
     app.run_polling()
-
 
 if __name__ == "__main__":
     main()
