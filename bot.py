@@ -20,7 +20,7 @@ from dotenv import load_dotenv
 # Configuration
 # =========================
 load_dotenv()
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_BOT_TOKEN = "8252295424:AAGRllLya9BowzOdoKQvEt42MMTwUSAkn2M"
 
 # Logging setup
 logging.basicConfig(
