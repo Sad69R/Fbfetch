@@ -74,33 +74,53 @@ class FacebookScraper:
         options.binary_location = "/usr/bin/chromium"
         return webdriver.Chrome(options=options)
 
+    def get_profile_id(self, driver, url):
+        try:
+            meta = driver.find_element(By.CSS_SELECTOR, "meta[property='fb:profile_id']")
+            pid = meta.get_attribute("content")
+            if pid:
+                return pid
+        except:
+            pass
+
+        try:
+            mobile = url.replace("www.facebook.com", "m.facebook.com").replace("facebook.com", "m.facebook.com")
+            driver.get(mobile)
+            time.sleep(2)
+            if "id=" in driver.current_url:
+                return driver.current_url.split("id=")[1].split("&")[0]
+        except:
+            pass
+
+        return None
+
     def scrape(self, url):
         driver = self.setup_driver()
         data = {
             "profile": None,
             "cover": None,
-            "photos": []
+            "photos": [],
+            "profile_id": None
         }
 
         try:
             driver.get(url)
             time.sleep(3)
 
-            # Profile photo
+            data["profile_id"] = self.get_profile_id(driver, url)
+
             try:
                 meta = driver.find_element(By.CSS_SELECTOR, "meta[property='og:image']")
                 data["profile"] = meta.get_attribute("content")
             except:
                 pass
 
-            # Cover photo
             try:
                 cover = driver.find_element(By.CSS_SELECTOR, "img[data-imgperflogname='profileCoverPhoto']")
                 data["cover"] = cover.get_attribute("src")
             except:
                 pass
 
-            # Public photos
             driver.get(url.rstrip("/") + "/photos")
             time.sleep(2)
             for _ in range(2):
@@ -126,14 +146,13 @@ class FacebookScraper:
 # =========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🔍 Facebook Photos Bot\n"
-        "• 📸 Profile photo\n"
-        "• 🖼️ Cover photo\n"
-        "• 📷 Up to 20 public photos\n\n"
-        f"🎁 Free users: **{DAILY_LIMIT} requests daily**\n"
-        f"💎 Unlimited access: DM **{SUBSCRIBE_USERNAME}**\n\n"
-        "📌 send a Facebook profile\n\n",
-        parse_mode="Markdown"
+        "🔍 Facebook Photos Bot\n\n"
+        "📸 Profile photo\n"
+        "🖼️ Cover photo\n"
+        "📷 Up to 20 public photos\n"
+        "🆔 Profile ID\n\n"
+        f"🎁 Free users: {DAILY_LIMIT} requests / day\n"
+        f"💎 Unlimited: DM {SUBSCRIBE_USERNAME}"
     )
 
 
@@ -142,7 +161,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = (update.message.text or "").strip()
 
     if "facebook.com" not in url:
-        await update.message.reply_text("❌ Please send a valid Facebook profile URL.")
+        await update.message.reply_text("❌ Send a valid Facebook profile URL.")
         return
 
     subscribers = load_subscribers()
@@ -151,18 +170,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         allowed, remaining = check_limit(user_id)
         if not allowed:
             await update.message.reply_text(
-                "🚫 **Daily limit reached**\n\n"
-                f"💎 Get unlimited requests by messaging {SUBSCRIBE_USERNAME}",
-                parse_mode="Markdown"
+                f"🚫 Daily limit reached ({DAILY_LIMIT})\n\n"
+                f"💎 Subscribe by messaging {SUBSCRIBE_USERNAME}"
             )
             return
     else:
         remaining = "∞"
 
     status = await update.message.reply_text(
-        "⏳ **Fetching profile data…**\n"
-        f"📊 Remaining today: **{remaining}**",
-        parse_mode="Markdown"
+        f"⏳ Fetching data...\nRemaining today: {remaining}"
     )
 
     scraper = FacebookScraper()
@@ -170,46 +186,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await status.delete()
 
-    # =========================
-    # SEND RESULTS
-    # =========================
-    sent_profile = sent_cover = sent_photos = 0
+    if data["profile_id"]:
+        await update.message.reply_text(f"🆔 Profile ID:\n{data['profile_id']}")
 
     if data["profile"]:
         await update.message.reply_photo(data["profile"], caption="📸 Profile Photo")
-        sent_profile = 1
 
     if data["cover"]:
         await update.message.reply_photo(data["cover"], caption="🖼️ Cover Photo")
-        sent_cover = 1
 
     if data["photos"]:
         media = [InputMediaPhoto(p) for p in data["photos"]]
         for i in range(0, len(media), 10):
             await update.message.reply_media_group(media[i:i+10])
-        sent_photos = len(data["photos"])
-
-    # =========================
-    # SUMMARY
-    # =========================
-    await update.message.reply_text(
-        "✅"
-        f"📸 Profile photo: {'✅' if sent_profile else '❌'}\n"
-        f"🖼️ Cover photo: {'✅' if sent_cover else '❌'}\n"
-        f"📷 Public photos: **{sent_photos}**\n\n"
-        "🚀",
-        parse_mode="Markdown"
-    )
 
 
-# =========================
-# MAIN
-# =========================
 def main():
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    print("✅ Bot is running...")
     app.run_polling()
 
 
