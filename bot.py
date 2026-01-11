@@ -3,9 +3,7 @@ from telegram import Update, InputMediaPhoto
 from telegram.ext import (
     Application,
     CommandHandler,
-    MessageHandler,
     ContextTypes,
-    filters,
 )
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -23,7 +21,6 @@ class FacebookScraper:
         self.driver = None
 
     def setup_driver(self):
-        """Chrome setup compatible with Docker/Railway"""
         chrome_options = Options()
         chrome_options.add_argument("--headless")
         chrome_options.add_argument("--no-sandbox")
@@ -39,7 +36,7 @@ class FacebookScraper:
         try:
             self.setup_driver()
             self.driver.get(profile_url)
-            time.sleep(3)  # wait for page load
+            time.sleep(3)
 
             result = {
                 "profile_photo": None,
@@ -69,8 +66,7 @@ class FacebookScraper:
             try:
                 self.driver.get(profile_url.rstrip("/") + "/photos")
                 time.sleep(2)
-
-                for _ in range(2):  # scroll less, faster
+                for _ in range(2):
                     self.driver.execute_script(
                         "window.scrollTo(0, document.body.scrollHeight);"
                     )
@@ -103,19 +99,21 @@ class FacebookScraper:
 # =========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 Send me a Facebook profile URL and I will fetch:\n"
-        "• Profile photo\n"
-        "• Cover photo\n"
-        "• Public photos (top 20)\n\n"
-        "Example:\nhttps://facebook.com/username"
+        "👋 Welcome! Use the command:\n"
+        "/fetchphotos <Facebook Profile URL>\n\n"
+        "Example:\n/fetchphotos https://facebook.com/username"
     )
 
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    url = (update.message.text or "").strip()
+async def fetch_photos(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    args = context.args  # list of words after command
+    if not args:
+        await update.message.reply_text("❌ Please provide a Facebook profile URL after the command.")
+        return
 
+    url = args[0].strip()
     if "facebook.com" not in url:
-        await update.message.reply_text("❌ Please send a valid Facebook profile URL.")
+        await update.message.reply_text("❌ Please provide a valid Facebook profile URL.")
         return
 
     await update.message.reply_text("🔍 Fetching photos... this may take a few seconds.")
@@ -124,28 +122,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = scraper.scrape_photos(url)
 
     if not data:
-        await update.message.reply_text(
-            "❌ Failed to fetch photos. The profile may be private or blocked."
-        )
+        await update.message.reply_text("❌ Failed to fetch photos. The profile may be private or blocked.")
         return
 
-    # Send profile photo
+    # Profile photo
     if data["profile_photo"]:
         await update.message.reply_photo(data["profile_photo"], caption="📸 Profile Photo")
 
-    # Send cover photo
+    # Cover photo
     if data["cover_photo"]:
         await update.message.reply_photo(data["cover_photo"], caption="🖼️ Cover Photo")
 
-    # Send public photos as media group (faster)
+    # Public photos
     public_photos = data["public_photos"]
     if public_photos:
         await update.message.reply_text(f"📷 Found {len(public_photos)} public photos. Sending top {min(20, len(public_photos))}...")
-
-        # Prepare media group
         media = [InputMediaPhoto(url) for url in public_photos[:20]]
-        # Telegram only allows max 10 per media group
-        for i in range(0, len(media), 10):
+        for i in range(0, len(media), 10):  # Telegram media group max 10
             await update.message.reply_media_group(media[i:i+10])
     else:
         await update.message.reply_text("No public photos found.")
@@ -155,7 +148,7 @@ def main():
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(CommandHandler("fetchphotos", fetch_photos))
 
     print("Bot is running...")
     app.run_polling()
