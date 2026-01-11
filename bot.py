@@ -15,7 +15,7 @@ from selenium.webdriver.chrome.options import Options
 # =========================
 # ضع توكن البوت هنا
 # =========================
-TELEGRAM_BOT_TOKEN = "PUT_YOUR_BOT_TOKEN_HERE"
+TELEGRAM_BOT_TOKEN = "8252295424:AAGRllLya9BowzOdoKQvEt42MMTwUSAkn2M"
 
 
 class FacebookScraper:
