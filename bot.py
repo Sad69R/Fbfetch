@@ -3,7 +3,9 @@ from telegram import Update, InputMediaPhoto
 from telegram.ext import (
     Application,
     CommandHandler,
+    MessageHandler,
     ContextTypes,
+    filters,
 )
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -99,21 +101,19 @@ class FacebookScraper:
 # =========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 Welcome! Use the command:\n"
-        "/fetchphotos <Facebook Profile URL>\n\n"
-        "Example:\n/fetchphotos https://facebook.com/username"
+        "👋 Send me a Facebook profile URL and I will fetch:\n"
+        "• Profile photo\n"
+        "• Cover photo\n"
+        "• Public photos (top 20)\n\n"
+        "Example:\nhttps://facebook.com/username"
     )
 
 
-async def fetch_photos(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    args = context.args  # list of words after command
-    if not args:
-        await update.message.reply_text("❌ Please provide a Facebook profile URL after the command.")
-        return
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    url = (update.message.text or "").strip()
 
-    url = args[0].strip()
     if "facebook.com" not in url:
-        await update.message.reply_text("❌ Please provide a valid Facebook profile URL.")
+        await update.message.reply_text("❌ Please send a valid Facebook profile URL.")
         return
 
     await update.message.reply_text("🔍 Fetching photos... this may take a few seconds.")
@@ -148,7 +148,7 @@ def main():
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("fetchphotos", fetch_photos))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     print("Bot is running...")
     app.run_polling()
