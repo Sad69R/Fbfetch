@@ -15,7 +15,7 @@ from selenium.webdriver.chrome.options import Options
 # =========================
 # ضع توكن البوت هنا
 # =========================
-TELEGRAM_BOT_TOKEN = "8252295424:AAGRllLya9BowzOdoKQvEt42MMTwUSAkn2M"
+TELEGRAM_BOT_TOKEN = "PUT_YOUR_BOT_TOKEN_HERE"
 
 
 class FacebookScraper:
@@ -34,7 +34,7 @@ class FacebookScraper:
         self.driver = webdriver.Chrome(options=chrome_options)
         return self.driver
 
-    def scrape_photos(self, profile_url: str):
+    def scrape_photos_and_links(self, profile_url: str):
         try:
             self.setup_driver()
             self.driver.get(profile_url)
@@ -48,7 +48,7 @@ class FacebookScraper:
             }
 
             # -------------------------
-            # Profile photo (with fallback for private)
+            # Profile photo
             # -------------------------
             try:
                 profile_img = self.driver.find_element(
@@ -63,7 +63,7 @@ class FacebookScraper:
                     pass
 
             # -------------------------
-            # Cover photo (with fallback)
+            # Cover photo
             # -------------------------
             try:
                 cover_img = self.driver.find_element(
@@ -84,9 +84,7 @@ class FacebookScraper:
                 self.driver.get(profile_url.rstrip("/") + "/photos")
                 time.sleep(2)
                 for _ in range(2):
-                    self.driver.execute_script(
-                        "window.scrollTo(0, document.body.scrollHeight);"
-                    )
+                    self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
                     time.sleep(1)
 
                 imgs = self.driver.find_elements(By.TAG_NAME, "img")
@@ -101,18 +99,22 @@ class FacebookScraper:
                 pass
 
             # -------------------------
-            # Public friends links
+            # Friends mentions/comments/tags links
             # -------------------------
             try:
-                self.driver.get(profile_url)  # Go back to main profile page
+                self.driver.get(profile_url)  # back to main profile page
                 time.sleep(2)
+
                 links = self.driver.find_elements(By.TAG_NAME, "a")
+                friends_set = set()
                 for link in links:
                     href = link.get_attribute("href")
-                    if href and "facebook.com/" in href and "profile.php?id=" in href:
-                        if href not in result["friends_links"]:
-                            result["friends_links"].append(href)
-                result["friends_links"] = result["friends_links"][:20]  # limit to 20
+                    # heuristic: should be facebook profile link
+                    if href and "facebook.com/" in href:
+                        # ignore page posts, groups, events
+                        if any(x in href for x in ["profile.php?id=", "/friends"]):
+                            friends_set.add(href)
+                result["friends_links"] = list(friends_set)[:30]  # limit top 30
             except:
                 pass
 
@@ -136,7 +138,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• Profile photo\n"
         "• Cover photo\n"
         "• Public photos (top 20)\n"
-        "• Public friends links (top 20)\n\n"
+        "• Friends mentions/comments/tags links (top 30)\n\n"
         "Example:\nhttps://facebook.com/username"
     )
 
@@ -151,7 +153,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔍 Fetching data... this may take a few seconds.")
 
     scraper = FacebookScraper()
-    data = scraper.scrape_photos(url)
+    data = scraper.scrape_photos_and_links(url)
 
     if not data:
         await update.message.reply_text("❌ Failed to fetch data. The profile may be private or blocked.")
@@ -172,18 +174,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📷 Found {len(public_photos)} public photos. Sending top {min(20, len(public_photos))}..."
         )
         media = [InputMediaPhoto(url) for url in public_photos[:20]]
-        for i in range(0, len(media), 10):  # Telegram media group max 10
+        for i in range(0, len(media), 10):
             await update.message.reply_media_group(media[i:i+10])
     else:
         await update.message.reply_text("No public photos found.")
 
-    # Public friends links
+    # Friends mentions/comments/tags links
     friends_links = data["friends_links"]
     if friends_links:
-        text = "👥 Found public friends (top 20):\n" + "\n".join(friends_links)
+        text = "👥 Found friends mentions/comments/tags (top 30):\n" + "\n".join(friends_links)
         await update.message.reply_text(text)
     else:
-        await update.message.reply_text("No public friends found.")
+        await update.message.reply_text("No friends mentions/comments/tags found.")
 
 
 def main():
