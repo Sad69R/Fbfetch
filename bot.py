@@ -176,20 +176,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = scraper.scrape(url)
     await status.delete()
 
+    # =========================
     # SEND RESULTS IN ORDER
+    # =========================
     if data.get("profile_id"):
         await update.message.reply_text(f"🆔 Profile ID:\n{data['profile_id']}")
+        time.sleep(0.5)
 
     if data.get("profile"):
         await update.message.reply_photo(data["profile"], caption="📸 Profile Photo")
+        time.sleep(0.5)
 
     if data.get("cover"):
         await update.message.reply_photo(data["cover"], caption="🖼️ Cover Photo")
+        time.sleep(0.5)
 
     if data.get("photos"):
         media = [InputMediaPhoto(p) for p in data["photos"]]
         for i in range(0, len(media), 10):
             await update.message.reply_media_group(media[i:i+10])
+            time.sleep(0.5)
 
 # =========================
 # MAIN
