@@ -3,7 +3,6 @@ import random
 import os
 import logging
 import requests
-import re
 from datetime import datetime
 from telegram import Update, InputMediaPhoto
 from telegram.ext import (
@@ -16,11 +15,9 @@ from telegram.ext import (
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
-
-# =========================
-# Configuration
-
 
 TELEGRAM_BOT_TOKEN = ("8252295424:AAGRllLya9BowzOdoKQvEt42MMTwUSAkn2M")
 
@@ -40,355 +37,422 @@ class FacebookScraper:
     def __init__(self):
         self.driver = None
 
-    def setup_driver(self):
-        """Setup Chrome driver"""
-        chrome_options = Options()
-        chrome_options.add_argument("--headless=new")
-        chrome_options.add_argument("--no-sandbox")
-        chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument("--disable-gpu")
-        chrome_options.add_argument("--window-size=1920,1080")
-        chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        chrome_options.add_experimental_option('useAutomationExtension', False)
-        chrome_options.add_argument(
-            'user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-            'AppleWebKit/537.36 (KHTML, like Gecko) '
-            'Chrome/120.0.0.0 Safari/537.36'
-        )
-        chrome_options.binary_location = "/usr/bin/chromium"
-        
-        self.driver = webdriver.Chrome(options=chrome_options)
-        self.driver.set_page_load_timeout(20)
-        self.driver.execute_script(
-            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-        )
-        logger.info("Chrome driver initialized")
-        return self.driver
-
-    def close_popups(self):
-        """Close popups"""
-        try:
-            selectors = [
-                "[aria-label='Close']",
-                "[aria-label='close']",
-                "div[role='button'][aria-label='Close']",
-            ]
-            for sel in selectors:
-                try:
-                    elems = self.driver.find_elements(By.CSS_SELECTOR, sel)
-                    if elems:
-                        elems[0].click()
-                        time.sleep(0.5)
-                        return
-                except:
-                    pass
-        except:
-            pass
-
-    def extract_user_id(self, profile_url):
-        """Extract user ID from URL"""
+    def extract_user_id_from_url(self, profile_url: str):
+        """Extract user ID directly from URL"""
         user_id = None
         username = None
         
         try:
             if "profile.php?id=" in profile_url:
                 user_id = profile_url.split("profile.php?id=")[1].split("&")[0]
+                logger.info(f"User ID from URL: {user_id}")
             elif "/people/" in profile_url:
                 parts = profile_url.split("/people/")[1].split("/")
                 username = parts[0]
                 if len(parts) > 1:
                     user_id = parts[1]
+                logger.info(f"Username: {username}, ID: {user_id}")
             else:
                 username = profile_url.rstrip("/").split("/")[-1].split("?")[0]
-                if username not in ["www.facebook.com", "facebook.com", "m.facebook.com"]:
-                    pass
-                else:
-                    username = None
-        except:
-            pass
+                if username and username not in ["www.facebook.com", "facebook.com", "m.facebook.com"]:
+                    logger.info(f"Username from URL: {username}")
+        except Exception as e:
+            logger.error(f"Error extracting from URL: {e}")
         
-        logger.info(f"Extracted - ID: {user_id}, Username: {username}")
         return user_id, username
 
-    def get_profile_photo_comprehensive(self, user_id, profile_url):
-        """Comprehensive profile photo extraction - tries ALL methods"""
+    def get_profile_photo_via_graph_api(self, user_id: str):
+        """Get profile photo using Facebook Graph API"""
+        if not user_id:
+            return None, None
         
-        # Method 1: Graph API
-        if user_id:
-            try:
-                logger.info("Method 1: Trying Graph API...")
-                direct_url = f"https://graph.facebook.com/{user_id}/picture?type=large&width=720&height=720"
-                response = requests.head(direct_url, timeout=10, allow_redirects=True)
-                if response.status_code == 200:
-                    final_url = response.url
-                    # Check if not silhouette
-                    if "static" not in final_url and len(final_url) > 100:
-                        logger.info(f"✓ Graph API success: {final_url[:80]}...")
-                        return final_url
-            except Exception as e:
-                logger.debug(f"Graph API failed: {e}")
-        
-        # Method 2-8: Web scraping methods
         try:
-            logger.info("Method 2-8: Trying web scraping...")
-            self.setup_driver()
+            # Try multiple Graph API methods
             
-            # Load page
-            try:
-                self.driver.get(profile_url)
-                time.sleep(3)
-                self.close_popups()
-            except:
-                pass
+            # Method 1: Direct redirect URL (simplest, most reliable)
+            direct_url = f"https://graph.facebook.com/{user_id}/picture?type=large&width=720&height=720"
+            logger.info(f"Trying direct Graph API URL: {direct_url}")
             
-            # Method 2: SVG images (most common for profile photos)
-            try:
-                logger.info("Method 2: SVG images...")
-                svg_imgs = self.driver.find_elements(By.CSS_SELECTOR, "svg image")
-                for img in svg_imgs:
-                    href = img.get_attribute("xlink:href") or img.get_attribute("href")
-                    if href and "scontent" in href:
-                        logger.info(f"✓ SVG method: {href[:80]}...")
-                        return href
-            except Exception as e:
-                logger.debug(f"SVG method failed: {e}")
+            # Test if the URL is accessible
+            test_response = requests.head(direct_url, timeout=10, allow_redirects=True)
+            if test_response.status_code == 200:
+                final_url = test_response.url  # This is the actual image URL after redirect
+                logger.info(f"✓ Profile photo found via Graph API: {final_url}")
+                return final_url, False
             
-            # Method 3: Profile picture link
+            # Method 2: Non-redirect API call to get JSON response
+            json_url = f"https://graph.facebook.com/{user_id}/picture?type=large&redirect=0&width=720&height=720"
+            logger.info(f"Trying JSON Graph API URL: {json_url}")
+            
+            response = requests.get(json_url, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                logger.info(f"Graph API JSON response: {data}")
+                
+                if data.get("data") and data["data"].get("url"):
+                    profile_url = data["data"]["url"]
+                    is_silhouette = data["data"].get("is_silhouette", False)
+                    
+                    logger.info(f"✓ Profile photo from JSON: {profile_url}, silhouette: {is_silhouette}")
+                    return profile_url, is_silhouette
+            
+            # Method 3: Try different sizes
+            for size in ["large", "normal", "small"]:
+                fallback_url = f"https://graph.facebook.com/{user_id}/picture?type={size}"
+                logger.info(f"Trying fallback size: {size}")
+                test = requests.head(fallback_url, timeout=10, allow_redirects=True)
+                if test.status_code == 200:
+                    logger.info(f"✓ Fallback successful with size: {size}")
+                    return test.url, False
+            
+            logger.warning("❌ Could not fetch profile photo via any Graph API method")
+            return None, None
+            
+        except Exception as e:
+            logger.error(f"❌ Error getting profile photo via Graph API: {e}")
+            return None, None
+
+    def setup_driver(self):
+        """Setup Chrome driver optimized for speed"""
+        chrome_options = Options()
+        
+        # Performance optimizations
+        chrome_options.add_argument("--headless=new")
+        chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument("--disable-dev-shm-usage")
+        chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument("--disable-software-rasterizer")
+        chrome_options.add_argument("--disable-extensions")
+        chrome_options.add_argument("--disable-logging")
+        chrome_options.add_argument("--window-size=1920,1080")
+        
+        # Disable images for faster loading
+        prefs = {
+            "profile.managed_default_content_settings.images": 2,
+            "profile.default_content_setting_values.notifications": 2,
+        }
+        chrome_options.add_experimental_option("prefs", prefs)
+        
+        # Anti-detection
+        chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        chrome_options.add_experimental_option('useAutomationExtension', False)
+        
+        # User agent
+        chrome_options.add_argument(
+            'user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+            'AppleWebKit/537.36 (KHTML, like Gecko) '
+            'Chrome/120.0.0.0 Safari/537.36'
+        )
+        
+        # Docker path
+        chrome_options.binary_location = "/usr/bin/chromium"
+        
+        self.driver = webdriver.Chrome(options=chrome_options)
+        self.driver.set_page_load_timeout(15)
+        
+        # Hide webdriver
+        self.driver.execute_script(
+            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+        )
+        
+        logger.info("Chrome driver initialized")
+        return self.driver
+
+    def get_profile_photo_from_page(self):
+        """Extract profile photo directly from page HTML/DOM"""
+        profile_photo = None
+        
+        # Method 1: SVG image elements (most reliable for mobile view)
+        try:
+            svg_images = self.driver.find_elements(By.CSS_SELECTOR, "svg image")
+            for img in svg_images:
+                href = img.get_attribute("xlink:href") or img.get_attribute("href")
+                if href and ("scontent" in href or "fbcdn" in href):
+                    # Look for high-quality indicators
+                    if "_nc_cat" in href or "_nc_ohc" in href or "p720x720" in href:
+                        profile_photo = href
+                        logger.info(f"✓ Profile photo from SVG: {href[:100]}...")
+                        break
+                    elif not profile_photo:  # Store as fallback
+                        profile_photo = href
+        except Exception as e:
+            logger.debug(f"SVG method failed: {e}")
+        
+        # Method 2: Image tags with specific attributes
+        if not profile_photo:
             try:
-                logger.info("Method 3: Profile picture link...")
-                links = self.driver.find_elements(By.CSS_SELECTOR, "a[href*='photo'], a[href*='picture']")
-                for link in links[:5]:
-                    imgs = link.find_elements(By.TAG_NAME, "img")
+                selectors = [
+                    "img[data-imgperflogname='profileCoverPhoto']",
+                    "img[alt][src*='scontent']",
+                    "a[href*='photo'] img[src*='scontent']",
+                ]
+                
+                for selector in selectors:
+                    imgs = self.driver.find_elements(By.CSS_SELECTOR, selector)
                     for img in imgs:
                         src = img.get_attribute("src")
-                        if src and "scontent" in src and "p130x130" not in src:
-                            logger.info(f"✓ Link method: {src[:80]}...")
-                            return src
+                        if src and "scontent" in src:
+                            # Avoid cover photos and small thumbnails
+                            if "p720x720" not in src and "p130x130" not in src:
+                                alt = (img.get_attribute("alt") or "").lower()
+                                # Check if it's likely a profile photo
+                                if "profile" in alt or not alt:
+                                    profile_photo = src
+                                    logger.info(f"✓ Profile photo from img tag: {src[:100]}...")
+                                    break
+                    if profile_photo:
+                        break
             except Exception as e:
-                logger.debug(f"Link method failed: {e}")
-            
-            # Method 4: All images on page
+                logger.debug(f"IMG tag method failed: {e}")
+        
+        # Method 3: Look in page source for high-res image URLs
+        if not profile_photo:
             try:
-                logger.info("Method 4: Scanning all images...")
-                all_imgs = self.driver.find_elements(By.TAG_NAME, "img")
-                best_img = None
-                best_size = 0
-                
-                for img in all_imgs[:30]:
-                    src = img.get_attribute("src")
-                    if src and "scontent" in src:
-                        # Get image size
-                        try:
-                            width = int(img.get_attribute("width") or 0)
-                            height = int(img.get_attribute("height") or 0)
-                            size = width * height
-                            
-                            # Look for square-ish images (profile photos are usually square)
-                            if 0.8 <= (width/height if height > 0 else 0) <= 1.2:
-                                if size > best_size and "p130x130" not in src:
-                                    best_img = src
-                                    best_size = size
-                        except:
-                            if not best_img and "p130x130" not in src:
-                                best_img = src
-                
-                if best_img:
-                    logger.info(f"✓ Image scan method: {best_img[:80]}...")
-                    return best_img
-            except Exception as e:
-                logger.debug(f"Image scan failed: {e}")
-            
-            # Method 5: Page source regex
-            try:
-                logger.info("Method 5: Page source regex...")
+                import re
                 page_source = self.driver.page_source
+                
+                # Find all scontent URLs
                 pattern = r'https://scontent[^"\'>\s]+\.(?:jpg|jpeg|png)'
                 matches = re.findall(pattern, page_source)
                 
+                # Filter for likely profile photos (medium to large size indicators)
                 for url in matches:
-                    if "_n." in url or "_s." in url or "_b." in url:
-                        if "p130x130" not in url and "p75x75" not in url:
-                            logger.info(f"✓ Regex method: {url[:80]}...")
-                            return url
+                    if any(size in url for size in ["_n.", "_s.", "_b."]) and "p720x720" not in url:
+                        profile_photo = url
+                        logger.info(f"✓ Profile photo from page source: {url[:100]}...")
+                        break
             except Exception as e:
-                logger.debug(f"Regex method failed: {e}")
-            
-            # Method 6: Meta tag
-            try:
-                logger.info("Method 6: Meta og:image...")
-                meta = self.driver.find_element(By.CSS_SELECTOR, "meta[property='og:image']")
-                content = meta.get_attribute("content")
-                if content:
-                    logger.info(f"✓ Meta tag method: {content[:80]}...")
-                    return content
-            except Exception as e:
-                logger.debug(f"Meta tag failed: {e}")
-            
-            # Method 7: Mobile view
-            try:
-                logger.info("Method 7: Trying mobile view...")
-                mobile_url = profile_url.replace("www.facebook.com", "m.facebook.com").replace("facebook.com", "m.facebook.com")
-                self.driver.get(mobile_url)
-                time.sleep(2)
-                
-                imgs = self.driver.find_elements(By.CSS_SELECTOR, "img[src*='scontent']")
-                for img in imgs:
-                    src = img.get_attribute("src")
-                    if src and "p130x130" not in src and "p75x75" not in src:
-                        logger.info(f"✓ Mobile method: {src[:80]}...")
-                        return src
-            except Exception as e:
-                logger.debug(f"Mobile method failed: {e}")
-            
-            # Method 8: mbasic.facebook.com (most basic version)
-            try:
-                logger.info("Method 8: Trying mbasic view...")
-                mbasic_url = profile_url.replace("www.facebook.com", "mbasic.facebook.com").replace("m.facebook.com", "mbasic.facebook.com").replace("facebook.com", "mbasic.facebook.com")
-                self.driver.get(mbasic_url)
-                time.sleep(2)
-                
-                imgs = self.driver.find_elements(By.TAG_NAME, "img")
-                for img in imgs[:10]:
-                    src = img.get_attribute("src")
-                    if src and "scontent" in src:
-                        logger.info(f"✓ mbasic method: {src[:80]}...")
-                        return src
-            except Exception as e:
-                logger.debug(f"mbasic method failed: {e}")
+                logger.debug(f"Page source method failed: {e}")
         
-        except Exception as e:
-            logger.error(f"Web scraping error: {e}")
+        # Method 4: Try mobile view which sometimes shows images differently
+        if not profile_photo:
+            try:
+                current_url = self.driver.current_url
+                if "m.facebook.com" not in current_url:
+                    mobile_url = current_url.replace("www.facebook.com", "m.facebook.com").replace("facebook.com", "m.facebook.com")
+                    logger.info(f"Trying mobile view: {mobile_url}")
+                    self.driver.get(mobile_url)
+                    time.sleep(1)
+                    
+                    # Re-try SVG method on mobile
+                    svg_images = self.driver.find_elements(By.CSS_SELECTOR, "svg image, img[src*='scontent']")
+                    for img in svg_images:
+                        src = img.get_attribute("src") or img.get_attribute("xlink:href") or img.get_attribute("href")
+                        if src and "scontent" in src and "p130x130" not in src:
+                            profile_photo = src
+                            logger.info(f"✓ Profile photo from mobile: {src[:100]}...")
+                            break
+            except Exception as e:
+                logger.debug(f"Mobile view method failed: {e}")
         
-        finally:
-            if self.driver:
-                try:
-                    self.driver.quit()
-                except:
-                    pass
-        
-        logger.warning("❌ All profile photo methods failed")
-        return None
-
-    def get_cover_photo_comprehensive(self, profile_url):
-        """Comprehensive cover photo extraction"""
+        return profile_photo
+        """Quickly close popups"""
         try:
-            if not self.driver:
-                self.setup_driver()
-                self.driver.get(profile_url)
-                time.sleep(2)
-                self.close_popups()
-            
-            # Method 1: Cover photo specific selectors
-            selectors = [
-                "img[data-imgperflogname='profileCoverPhoto']",
-                "div[data-pagelet='ProfileCover'] img",
-                "a[href*='cover_photo'] img",
-                "img[class*='cover']",
+            close_selectors = [
+                "[aria-label='Close']",
+                "[aria-label='close']",
+                "div[role='button'][aria-label='Close']",
             ]
             
-            for sel in selectors:
+            for selector in close_selectors:
                 try:
-                    elem = self.driver.find_element(By.CSS_SELECTOR, sel)
-                    src = elem.get_attribute("src")
-                    if src and "scontent" in src:
-                        logger.info(f"✓ Cover photo found: {src[:80]}...")
-                        return src
+                    elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                    if elements:
+                        elements[0].click()
+                        time.sleep(0.3)
+                        break
+                except:
+                    continue
+        except:
+            pass
+
+    def get_cover_photo(self):
+        """Get cover photo from page"""
+        cover_photo = None
+        
+        cover_selectors = [
+            "img[data-imgperflogname='profileCoverPhoto']",
+            "div[data-pagelet='ProfileCover'] img",
+            "a[href*='cover_photo'] img",
+        ]
+        
+        for selector in cover_selectors:
+            try:
+                elem = self.driver.find_element(By.CSS_SELECTOR, selector)
+                src = elem.get_attribute("src")
+                if src and "scontent" in src:
+                    cover_photo = src
+                    logger.info(f"Cover photo found")
+                    break
+            except:
+                continue
+        
+        return cover_photo
+
+    def extract_user_id_from_page(self):
+        """Extract user ID from page source if not in URL"""
+        user_id = None
+        
+        try:
+            # Method 1: Meta tags
+            meta_selectors = [
+                "meta[property='al:android:url']",
+                "meta[property='al:ios:url']",
+            ]
+            
+            for selector in meta_selectors:
+                try:
+                    meta = self.driver.find_element(By.CSS_SELECTOR, selector)
+                    content = meta.get_attribute("content")
+                    if content and "id=" in content:
+                        user_id = content.split("id=")[1].split("&")[0]
+                        logger.info(f"User ID from meta: {user_id}")
+                        return user_id
                 except:
                     continue
             
-            # Method 2: Large images (cover photos are wide)
-            try:
-                imgs = self.driver.find_elements(By.TAG_NAME, "img")
-                for img in imgs:
-                    try:
-                        width = int(img.get_attribute("width") or 0)
-                        height = int(img.get_attribute("height") or 0)
-                        
-                        # Cover photos are typically wide (width > 2 * height)
-                        if width > 400 and width > height * 1.5:
-                            src = img.get_attribute("src")
-                            if src and "scontent" in src:
-                                logger.info(f"✓ Cover photo by size: {src[:80]}...")
-                                return src
-                    except:
-                        continue
-            except:
-                pass
+            # Method 2: Profile links
+            links = self.driver.find_elements(By.CSS_SELECTOR, "a[href*='profile.php?id=']")
+            if links:
+                href = links[0].get_attribute("href")
+                user_id = href.split("profile.php?id=")[1].split("&")[0]
+                logger.info(f"User ID from link: {user_id}")
+                return user_id
             
-            logger.warning("❌ Cover photo not found")
-            return None
+            # Method 3: Page source regex
+            import re
+            page_source = self.driver.page_source
+            patterns = [
+                r'"entity_id":"(\d+)"',
+                r'"userID":"(\d+)"',
+                r'"profile_id":"(\d+)"',
+            ]
             
+            for pattern in patterns:
+                match = re.search(pattern, page_source)
+                if match:
+                    user_id = match.group(1)
+                    logger.info(f"User ID from page source: {user_id}")
+                    return user_id
+                    
         except Exception as e:
-            logger.error(f"Cover photo error: {e}")
-            return None
-
-    def scrape_profile(self, profile_url):
-        """Main scraping function"""
-        result = {
-            "user_id": None,
-            "username": None,
-            "profile_photo": None,
-            "cover_photo": None,
-            "public_photos": [],
-            "friends_links": [],
-            "error": None
-        }
+            logger.error(f"Error extracting user ID from page: {e}")
         
+        return user_id
+
+    def scrape_profile(self, profile_url: str):
+        """Main scraping function using Graph API + web scraping"""
         try:
-            # Extract user ID from URL
-            user_id, username = self.extract_user_id(profile_url)
+            result = {
+                "user_id": None,
+                "username": None,
+                "profile_photo": None,
+                "profile_photo_hd": None,
+                "cover_photo": None,
+                "public_photos": [],
+                "friends_links": [],
+                "is_silhouette": False,
+                "error": None
+            }
+
+            # Step 1: Extract user ID from URL
+            user_id, username = self.extract_user_id_from_url(profile_url)
             result["user_id"] = user_id
             result["username"] = username
             
-            # Get profile photo (tries 8 different methods)
-            logger.info("=" * 50)
-            logger.info("STARTING PROFILE PHOTO EXTRACTION")
-            logger.info("=" * 50)
-            result["profile_photo"] = self.get_profile_photo_comprehensive(user_id, profile_url)
+            # Step 2: If we have user ID, try Graph API first (fast but may return silhouette)
+            graph_api_photo = None
+            if user_id:
+                logger.info(f"Attempting Graph API for user ID: {user_id}")
+                graph_api_photo, is_silhouette = self.get_profile_photo_via_graph_api(user_id)
+                if graph_api_photo and not is_silhouette:
+                    result["profile_photo"] = graph_api_photo
+                    result["profile_photo_hd"] = graph_api_photo
+                    result["is_silhouette"] = False
+                    logger.info(f"✓✓✓ Profile photo via Graph API (not silhouette)")
+                elif is_silhouette:
+                    logger.warning(f"⚠️ Graph API returned silhouette, will try scraping")
             
-            # Get cover photo
-            logger.info("=" * 50)
-            logger.info("STARTING COVER PHOTO EXTRACTION")
-            logger.info("=" * 50)
-            result["cover_photo"] = self.get_cover_photo_comprehensive(profile_url)
+            # Step 3: Setup Selenium and scrape if Graph API failed or returned silhouette
+            self.setup_driver()
             
-            # Get public photos
+            logger.info(f"Loading profile page: {profile_url}")
             try:
-                logger.info("Getting public photos...")
-                if not self.driver:
-                    self.setup_driver()
-                
-                photos_url = profile_url.rstrip("/").split("?")[0] + "/photos"
-                self.driver.get(photos_url)
+                self.driver.get(profile_url)
                 time.sleep(2)
-                self.close_popups()
+                self.quick_close_popups()
+            except TimeoutException:
+                logger.warning("Page load timeout, continuing")
+            
+            # Step 4: If no profile photo yet (or silhouette), scrape from page
+            if not result["profile_photo"] or result.get("is_silhouette"):
+                logger.info("Attempting to scrape profile photo from page...")
+                scraped_photo = self.get_profile_photo_from_page()
+                if scraped_photo:
+                    result["profile_photo"] = scraped_photo
+                    result["profile_photo_hd"] = scraped_photo
+                    result["is_silhouette"] = False
+                    logger.info(f"✓✓✓ Profile photo scraped from page!")
+            
+            # Step 5: If still no user ID, extract from page
+            if not result["user_id"]:
+                result["user_id"] = self.extract_user_id_from_page()
                 
+                # Try Graph API again if we now have user ID
+                if result["user_id"] and not result["profile_photo"]:
+                    profile_photo, is_silhouette = self.get_profile_photo_via_graph_api(result["user_id"])
+                    if profile_photo:
+                        result["profile_photo"] = profile_photo
+                        result["profile_photo_hd"] = profile_photo
+                        result["is_silhouette"] = is_silhouette
+            
+            # Step 6: Get cover photo
+            result["cover_photo"] = self.get_cover_photo()
+            
+            # Step 7: Get public photos
+            try:
+                photos_url = profile_url.rstrip("/").split("?")[0] + "/photos"
+                logger.info(f"Loading photos: {photos_url}")
+                
+                try:
+                    self.driver.get(photos_url)
+                    time.sleep(2)
+                except TimeoutException:
+                    pass
+                
+                self.quick_close_popups()
+                
+                # Single scroll
                 self.driver.execute_script("window.scrollTo(0, 800);")
                 time.sleep(1)
                 
+                # Collect photos
                 seen = set()
                 imgs = self.driver.find_elements(By.TAG_NAME, "img")
                 
                 for img in imgs:
                     if len(result["public_photos"]) >= 20:
                         break
+                    
                     src = img.get_attribute("src")
-                    if src and "scontent" in src:
+                    if src and ("scontent" in src or "fbcdn" in src):
                         if all(x not in src for x in ["p130x130", "p75x75", "s32x32"]):
                             if src not in seen:
                                 seen.add(src)
                                 result["public_photos"].append(src)
                 
-                logger.info(f"Found {len(result['public_photos'])} public photos")
+                logger.info(f"Collected {len(result['public_photos'])} photos")
+                
             except Exception as e:
-                logger.error(f"Public photos error: {e}")
-            
-            # Get friend links
+                logger.error(f"Error getting photos: {e}")
+
+            # Step 7: Get friend links
             try:
-                logger.info("Getting friend links...")
+                logger.info("Collecting friend links")
                 self.driver.get(profile_url)
-                time.sleep(1)
+                time.sleep(1.5)
+                
                 self.driver.execute_script("window.scrollTo(0, 1000);")
                 time.sleep(1)
                 
@@ -402,59 +466,71 @@ class FacebookScraper:
                             if any(x in href for x in ["profile.php?id=", "/people/", "/friends"]):
                                 clean = href.split("?")[0]
                                 friends_set.add(clean)
+                                
                                 if len(friends_set) >= 30:
                                     break
                     except:
                         continue
                 
-                result["friends_links"] = list(friends_set)
+                result["friends_links"] = list(friends_set)[:30]
                 logger.info(f"Found {len(result['friends_links'])} friend links")
+                
             except Exception as e:
-                logger.error(f"Friend links error: {e}")
-            
+                logger.error(f"Error getting friends: {e}")
+
             return result
-            
+
         except Exception as e:
             logger.error(f"Scraping error: {e}", exc_info=True)
             return {"error": str(e)}
-        
+
         finally:
             if self.driver:
-                try:
-                    self.driver.quit()
-                    logger.info("Driver closed")
-                except:
-                    pass
+                self.driver.quit()
+                logger.info("Driver closed")
 
 
 # =========================
 # Telegram handlers
 # =========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start command handler"""
+    user_id = update.message.from_user.id
+    username = update.message.from_user.username
+    logger.info(f"Start command from user {user_id} (@{username})")
+    
     await update.message.reply_text(
         "👋 <b>Facebook Profile Scraper Bot</b>\n\n"
         "Send me a Facebook profile URL and I will fetch:\n"
         "• 🆔 User ID\n"
-        "• 📸 Profile photo (8 extraction methods!)\n"
+        "• 📸 Profile photo (HD via Graph API)\n"
         "• 🖼️ Cover photo\n"
         "• 📷 Public photos (up to 20)\n"
-        "• 👥 Friends links (up to 30)\n\n"
+        "• 👥 Friends mentions/tags (up to 30 links)\n\n"
         "<b>Example:</b>\n"
         "<code>https://facebook.com/username</code>\n"
-        "<code>https://facebook.com/profile.php?id=123456</code>",
+        "<code>https://facebook.com/profile.php?id=123456</code>\n\n"
+        "⚠️ <b>Note:</b> Profile photos are fetched via Facebook's Graph API, "
+        "which works even for private profiles!",
         parse_mode='HTML'
     )
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Message handler for profile URLs"""
     user_id = update.message.from_user.id
     username = update.message.from_user.username
+    
     url = (update.message.text or "").strip()
     
+    # Validate URL
     if not url.startswith(("https://facebook.com/", "https://www.facebook.com/", "https://m.facebook.com/")):
         await update.message.reply_text(
             "❌ <b>Invalid URL</b>\n\n"
-            "Please send a valid Facebook profile URL.",
+            "Please send a valid Facebook profile URL.\n\n"
+            "<b>Examples:</b>\n"
+            "• <code>https://facebook.com/username</code>\n"
+            "• <code>https://www.facebook.com/profile.php?id=123456</code>",
             parse_mode='HTML'
         )
         return
@@ -462,9 +538,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"User {user_id} (@{username}) requested: {url}")
     
     status_msg = await update.message.reply_text(
-        "🔍 <b>Fetching data...</b>\n\n"
-        "Trying 8 different methods to extract profile photo.\n"
-        "This may take 20-40 seconds...",
+        "🔍 <b>Fetching data via Graph API...</b>\n\n"
+        "This should take 15-30 seconds.\n"
+        "Please wait...",
         parse_mode='HTML'
     )
     
@@ -473,130 +549,172 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         data = scraper.scrape_profile(url)
         
         if data.get("error"):
+            logger.error(f"Scraping failed: {data['error']}")
             await status_msg.edit_text(
-                f"❌ <b>Error</b>\n\n<code>{data['error']}</code>",
+                f"❌ <b>Error occurred</b>\n\n"
+                f"<code>{data['error']}</code>\n\n"
+                "<b>Possible causes:</b>\n"
+                "• Invalid URL format\n"
+                "• Network timeout\n"
+                "• Facebook blocking",
                 parse_mode='HTML'
             )
             return
         
         await status_msg.delete()
         
-        # User info
-        info_parts = []
+        # User ID and Username
+        user_info_parts = []
         if data.get("user_id"):
-            info_parts.append(f"🆔 <b>User ID:</b> <code>{data['user_id']}</code>")
+            user_info_parts.append(f"🆔 <b>User ID:</b> <code>{data['user_id']}</code>")
         if data.get("username"):
-            info_parts.append(f"👤 <b>Username:</b> <code>{data['username']}</code>")
+            user_info_parts.append(f"👤 <b>Username:</b> <code>{data['username']}</code>")
         
-        if info_parts:
-            await update.message.reply_text("\n".join(info_parts), parse_mode='HTML')
+        if user_info_parts:
+            info_text = "\n".join(user_info_parts)
+            if data.get("is_silhouette"):
+                info_text += "\n\n⚠️ <i>Profile photo is private or not set (showing silhouette)</i>"
+            
+            await update.message.reply_text(info_text, parse_mode='HTML')
+            logger.info(f"Sent user info: ID={data.get('user_id')}, Username={data.get('username')}")
         
         # Profile photo
         if data.get("profile_photo"):
             try:
+                caption = "📸 <b>Profile Photo (HD - Graph API)</b>"
+                if data.get("is_silhouette"):
+                    caption += "\n<i>⚠️ This is a default silhouette (profile is private)</i>"
+                
+                logger.info(f"Attempting to send profile photo: {data['profile_photo']}")
                 await update.message.reply_photo(
                     data["profile_photo"],
-                    caption="📸 <b>Profile Photo</b>",
+                    caption=caption,
                     parse_mode='HTML'
                 )
-                logger.info("✓ Sent profile photo")
+                logger.info("✓✓✓ Successfully sent profile photo via Graph API")
             except Exception as e:
-                logger.error(f"Send failed: {e}")
+                logger.error(f"❌❌❌ Failed to send profile photo: {e}")
+                # Try sending as URL instead
                 await update.message.reply_text(
-                    f"📸 <b>Profile Photo URL:</b>\n<a href='{data['profile_photo']}'>Click to view</a>",
-                    parse_mode='HTML'
+                    f"📸 <b>Profile Photo URL:</b>\n<code>{data['profile_photo']}</code>\n\n"
+                    f"<a href='{data['profile_photo']}'>Click to view</a>",
+                    parse_mode='HTML',
+                    disable_web_page_preview=False
                 )
         else:
-            await update.message.reply_text("📸 Profile photo not found")
-        
+            logger.warning("⚠️ No profile photo in data")
+            await update.message.reply_text("📸 No profile photo found (may be private or not set)")
+
         # Cover photo
-        if data.get("cover_photo"):
+        if data["cover_photo"]:
             try:
                 await update.message.reply_photo(
                     data["cover_photo"],
                     caption="🖼️ <b>Cover Photo</b>",
                     parse_mode='HTML'
                 )
-                logger.info("✓ Sent cover photo")
-            except:
-                pass
+                logger.info("Sent cover photo")
+            except Exception as e:
+                logger.error(f"Failed to send cover photo: {e}")
         else:
-            await update.message.reply_text("🖼️ Cover photo not found")
-        
+            await update.message.reply_text("🖼️ No cover photo found")
+
         # Public photos
-        photos = data.get("public_photos", [])
-        if photos:
+        public_photos = data["public_photos"]
+        if public_photos:
             await update.message.reply_text(
-                f"📷 <b>Found {len(photos)} public photos</b>",
+                f"📷 <b>Found {len(public_photos)} public photo(s)</b>\n\n"
+                f"Sending now...",
                 parse_mode='HTML'
             )
             
             try:
-                groups = [photos[i:i+10] for i in range(0, len(photos), 10)]
-                for group in groups:
+                media_groups = [public_photos[i:i+10] for i in range(0, len(public_photos), 10)]
+                
+                for idx, group in enumerate(media_groups):
                     media = [InputMediaPhoto(url) for url in group]
                     await update.message.reply_media_group(media)
-                    time.sleep(0.5)
-            except:
-                pass
+                    logger.info(f"Sent photo group {idx+1}/{len(media_groups)}")
+                    
+                    if idx < len(media_groups) - 1:
+                        time.sleep(0.5)
+                        
+            except Exception as e:
+                logger.error(f"Failed to send photos: {e}")
+                await update.message.reply_text("❌ Some photos could not be sent.")
         else:
             await update.message.reply_text("📷 No public photos found")
-        
-        # Friend links
-        friends = data.get("friends_links", [])
-        if friends:
-            text = f"👥 <b>Found {len(friends)} friend links</b>\n\n"
-            text += "\n".join([f"• {link}" for link in friends])
+
+        # Friends links
+        friends_links = data["friends_links"]
+        if friends_links:
+            links_text = "\n".join([f"• {link}" for link in friends_links])
+            message_text = (
+                f"👥 <b>Found {len(friends_links)} friend link(s)</b>\n\n"
+                f"{links_text}"
+            )
             
-            if len(text) > 4000:
-                chunks = [friends[i:i+15] for i in range(0, len(friends), 15)]
+            if len(message_text) > 4000:
+                chunks = [friends_links[i:i+15] for i in range(0, len(friends_links), 15)]
                 for idx, chunk in enumerate(chunks):
                     chunk_text = "\n".join([f"• {link}" for link in chunk])
                     await update.message.reply_text(
-                        f"👥 <b>Links ({idx+1}/{len(chunks)})</b>\n\n{chunk_text}",
+                        f"👥 <b>Friend links ({idx+1}/{len(chunks)})</b>\n\n{chunk_text}",
                         parse_mode='HTML'
                     )
             else:
-                await update.message.reply_text(text, parse_mode='HTML')
+                await update.message.reply_text(message_text, parse_mode='HTML')
+            
+            logger.info(f"Sent {len(friends_links)} friend links")
         else:
             await update.message.reply_text("👥 No friend links found")
         
         # Summary
         await update.message.reply_text(
-            "✅ <b>Complete!</b>\n\n"
+            "✅ <b>Scraping complete!</b>\n\n"
             f"• User ID: {data.get('user_id') or '✗'}\n"
             f"• Username: {data.get('username') or '✗'}\n"
-            f"• Profile photo: {'✓' if data.get('profile_photo') else '✗'}\n"
-            f"• Cover photo: {'✓' if data.get('cover_photo') else '✗'}\n"
-            f"• Public photos: {len(photos)}\n"
-            f"• Friend links: {len(friends)}",
+            f"• Profile photo: {'✓ (Graph API)' if data['profile_photo'] else '✗'}\n"
+            f"• Cover photo: {'✓' if data['cover_photo'] else '✗'}\n"
+            f"• Public photos: {len(public_photos)}\n"
+            f"• Friend links: {len(friends_links)}",
             parse_mode='HTML'
         )
         
+        logger.info(f"Successfully completed scraping for {url}")
+
     except Exception as e:
         logger.error(f"Handler error: {e}", exc_info=True)
         await update.message.reply_text(
-            f"❌ <b>Error</b>\n\n<code>{str(e)}</code>",
+            "❌ <b>An unexpected error occurred</b>\n\n"
+            f"<code>{str(e)}</code>",
             parse_mode='HTML'
         )
 
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Log errors"""
     logger.error(f"Update {update} caused error {context.error}", exc_info=context.error)
 
 
 def main():
+    """Main bot function"""
     if not TELEGRAM_BOT_TOKEN:
+        logger.error("TELEGRAM_BOT_TOKEN not found!")
         print("ERROR: Set TELEGRAM_BOT_TOKEN in .env file")
         return
     
     logger.info("Starting bot...")
+    
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_error_handler(error_handler)
+
+    logger.info("Bot running...")
+    print("✅ Bot is running! Press Ctrl+C to stop.")
     
-    print("✅ Bot is running!")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
