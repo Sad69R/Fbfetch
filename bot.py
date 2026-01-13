@@ -19,6 +19,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
 
+
 TELEGRAM_BOT_TOKEN = ("8252295424:AAGRllLya9BowzOdoKQvEt42MMTwUSAkn2M")
 
 # Logging setup
@@ -159,7 +160,94 @@ class FacebookScraper:
         logger.info("Chrome driver initialized")
         return self.driver
 
-    def quick_close_popups(self):
+    def get_profile_photo_from_page(self):
+        """Extract profile photo directly from page HTML/DOM"""
+        profile_photo = None
+        
+        # Method 1: SVG image elements (most reliable for mobile view)
+        try:
+            svg_images = self.driver.find_elements(By.CSS_SELECTOR, "svg image")
+            for img in svg_images:
+                href = img.get_attribute("xlink:href") or img.get_attribute("href")
+                if href and ("scontent" in href or "fbcdn" in href):
+                    # Look for high-quality indicators
+                    if "_nc_cat" in href or "_nc_ohc" in href or "p720x720" in href:
+                        profile_photo = href
+                        logger.info(f"✓ Profile photo from SVG: {href[:100]}...")
+                        break
+                    elif not profile_photo:  # Store as fallback
+                        profile_photo = href
+        except Exception as e:
+            logger.debug(f"SVG method failed: {e}")
+        
+        # Method 2: Image tags with specific attributes
+        if not profile_photo:
+            try:
+                selectors = [
+                    "img[data-imgperflogname='profileCoverPhoto']",
+                    "img[alt][src*='scontent']",
+                    "a[href*='photo'] img[src*='scontent']",
+                ]
+                
+                for selector in selectors:
+                    imgs = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                    for img in imgs:
+                        src = img.get_attribute("src")
+                        if src and "scontent" in src:
+                            # Avoid cover photos and small thumbnails
+                            if "p720x720" not in src and "p130x130" not in src:
+                                alt = (img.get_attribute("alt") or "").lower()
+                                # Check if it's likely a profile photo
+                                if "profile" in alt or not alt:
+                                    profile_photo = src
+                                    logger.info(f"✓ Profile photo from img tag: {src[:100]}...")
+                                    break
+                    if profile_photo:
+                        break
+            except Exception as e:
+                logger.debug(f"IMG tag method failed: {e}")
+        
+        # Method 3: Look in page source for high-res image URLs
+        if not profile_photo:
+            try:
+                import re
+                page_source = self.driver.page_source
+                
+                # Find all scontent URLs
+                pattern = r'https://scontent[^"\'>\s]+\.(?:jpg|jpeg|png)'
+                matches = re.findall(pattern, page_source)
+                
+                # Filter for likely profile photos (medium to large size indicators)
+                for url in matches:
+                    if any(size in url for size in ["_n.", "_s.", "_b."]) and "p720x720" not in url:
+                        profile_photo = url
+                        logger.info(f"✓ Profile photo from page source: {url[:100]}...")
+                        break
+            except Exception as e:
+                logger.debug(f"Page source method failed: {e}")
+        
+        # Method 4: Try mobile view which sometimes shows images differently
+        if not profile_photo:
+            try:
+                current_url = self.driver.current_url
+                if "m.facebook.com" not in current_url:
+                    mobile_url = current_url.replace("www.facebook.com", "m.facebook.com").replace("facebook.com", "m.facebook.com")
+                    logger.info(f"Trying mobile view: {mobile_url}")
+                    self.driver.get(mobile_url)
+                    time.sleep(1)
+                    
+                    # Re-try SVG method on mobile
+                    svg_images = self.driver.find_elements(By.CSS_SELECTOR, "svg image, img[src*='scontent']")
+                    for img in svg_images:
+                        src = img.get_attribute("src") or img.get_attribute("xlink:href") or img.get_attribute("href")
+                        if src and "scontent" in src and "p130x130" not in src:
+                            profile_photo = src
+                            logger.info(f"✓ Profile photo from mobile: {src[:100]}...")
+                            break
+            except Exception as e:
+                logger.debug(f"Mobile view method failed: {e}")
+        
+        return profile_photo
         """Quickly close popups"""
         try:
             close_selectors = [
@@ -274,21 +362,20 @@ class FacebookScraper:
             result["user_id"] = user_id
             result["username"] = username
             
-            # Step 2: If we have user ID, use Graph API for profile photo
+            # Step 2: If we have user ID, try Graph API first (fast but may return silhouette)
+            graph_api_photo = None
             if user_id:
-                logger.info(f"Attempting to fetch profile photo for user ID: {user_id}")
-                profile_photo, is_silhouette = self.get_profile_photo_via_graph_api(user_id)
-                if profile_photo:
-                    result["profile_photo"] = profile_photo
-                    result["profile_photo_hd"] = profile_photo
-                    result["is_silhouette"] = is_silhouette
-                    logger.info(f"✓✓✓ Profile photo obtained via Graph API: {profile_photo}")
-                else:
-                    logger.warning(f"⚠️ Graph API returned no photo for user ID: {user_id}")
-            else:
-                logger.warning("⚠️ No user ID found, cannot use Graph API")
+                logger.info(f"Attempting Graph API for user ID: {user_id}")
+                graph_api_photo, is_silhouette = self.get_profile_photo_via_graph_api(user_id)
+                if graph_api_photo and not is_silhouette:
+                    result["profile_photo"] = graph_api_photo
+                    result["profile_photo_hd"] = graph_api_photo
+                    result["is_silhouette"] = False
+                    logger.info(f"✓✓✓ Profile photo via Graph API (not silhouette)")
+                elif is_silhouette:
+                    logger.warning(f"⚠️ Graph API returned silhouette, will try scraping")
             
-            # Step 3: Setup Selenium for cover photo and other data
+            # Step 3: Setup Selenium and scrape if Graph API failed or returned silhouette
             self.setup_driver()
             
             logger.info(f"Loading profile page: {profile_url}")
@@ -299,7 +386,17 @@ class FacebookScraper:
             except TimeoutException:
                 logger.warning("Page load timeout, continuing")
             
-            # Step 4: If no user ID yet, extract from page
+            # Step 4: If no profile photo yet (or silhouette), scrape from page
+            if not result["profile_photo"] or result.get("is_silhouette"):
+                logger.info("Attempting to scrape profile photo from page...")
+                scraped_photo = self.get_profile_photo_from_page()
+                if scraped_photo:
+                    result["profile_photo"] = scraped_photo
+                    result["profile_photo_hd"] = scraped_photo
+                    result["is_silhouette"] = False
+                    logger.info(f"✓✓✓ Profile photo scraped from page!")
+            
+            # Step 5: If still no user ID, extract from page
             if not result["user_id"]:
                 result["user_id"] = self.extract_user_id_from_page()
                 
@@ -311,10 +408,10 @@ class FacebookScraper:
                         result["profile_photo_hd"] = profile_photo
                         result["is_silhouette"] = is_silhouette
             
-            # Step 5: Get cover photo
+            # Step 6: Get cover photo
             result["cover_photo"] = self.get_cover_photo()
             
-            # Step 6: Get public photos
+            # Step 7: Get public photos
             try:
                 photos_url = profile_url.rstrip("/").split("?")[0] + "/photos"
                 logger.info(f"Loading photos: {photos_url}")
