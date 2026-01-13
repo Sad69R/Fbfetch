@@ -18,7 +18,6 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
 
-
 TELEGRAM_BOT_TOKEN = ("8252295424:AAGRllLya9BowzOdoKQvEt42MMTwUSAkn2M")
 
 # Logging setup
@@ -435,16 +434,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"Start command from user {user_id} (@{username})")
     
     await update.message.reply_text(
-        "👋 <b>Facebook Profile Scraper Bot</b>\n\n"
-        "Send me a Facebook profile URL and I will fetch:\n"
-        "• 📸 Profile photo\n"
-        "• 🖼️ Cover photo\n"
-        "• 📷 Public photos (up to 20)\n"
-        "• 👥 Friends mentions/tags (up to 30 links)\n\n"
+        "👋 <b>Facebook Profile Bot</b>\n\n"
+        "Send me a Facebook profile URL\n"
         "<b>Example:</b>\n"
         "<code>https://facebook.com/username</code>\n\n"
-        "⚠️ <b>Note:</b> Only public data can be accessed. "
-        "Private profiles will return limited information.",
         parse_mode='HTML'
     )
 
@@ -471,7 +464,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"User {user_id} (@{username}) requested: {url}")
     
     status_msg = await update.message.reply_text(
-        "🔍 <b>Fetching data...</b>\n\n"
+        "🔍 <b>Searching Photos...</b>\n\n"
         "This should take 15-30 seconds.\n"
         "Please wait...",
         parse_mode='HTML'
@@ -599,7 +592,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Summary
         await update.message.reply_text(
-            "✅ <b>Scraping complete!</b>\n\n"
+            "✅ <b>Search complete!</b>\n\n"
             f"• User ID: {data.get('user_id') or '✗'}\n"
             f"• Username: {data.get('username') or '✗'}\n"
             f"• Profile photo: {'✓' if data['profile_photo'] else '✗'}\n"
